@@ -356,6 +356,10 @@ def tmp_dir():
 def language(request):
     return request.param
 
+@pytest.fixture(params=["values", "auto"])
+def source(request):
+    return request.param
+
 
 @pytest.fixture(scope="session")
 def clibjm(tmp_dir):
@@ -1073,13 +1077,13 @@ def test_model_json(directory):
         strict,
     )
 
-def test_values_json(directory):
-    """Check *.values.json files in directory."""
+def test_vectors_json(directory, source):
+    """Check *.{source}.json test vector files in directory."""
 
     check_directory_models(
         directory,
         "https://json-model.org/models/jmc-tests",
-        ".values.json",
+        f".{source}.json",
         get_json_file,
         EXPECT.get(f"{directory}:models"),
     )
@@ -1090,7 +1094,7 @@ def unsettled_vectors(fpath: pathlib.Path) -> list[tuple[int, list]]:
         vectors = [t for t in json.load(f) if isinstance(t, list)]
     return [(i, t) for i, t in enumerate(vectors) if t[0] is None]
 
-def test_auto_json(directory):
+def test_auto_settled(directory):
     """Check that generated test vectors in directory all carry a verdict."""
     for fpath in sorted(directory.glob("*.auto.json")):
         unsettled = unsettled_vectors(fpath)
@@ -1103,18 +1107,6 @@ def test_auto_json(directory):
         assert False, \
             f"{fpath}: {len(unsettled)} vector(s) without a verdict, " \
             f"state each one in {vfile}:\n{shown}"
-
-def test_values_settled(directory):
-    """Check that hand written test vectors in directory all carry a verdict."""
-    for fpath in sorted(directory.glob("*.values.json")):
-        unsettled = unsettled_vectors(fpath)
-        if not unsettled:
-            continue
-
-        shown = "\n".join(f"  [{i}] {json.dumps(t[-1])}" for i, t in unsettled)
-        assert False, \
-            f"{fpath}: {len(unsettled)} vector(s) waiting for a verdict, " \
-            f"set true or false on each:\n{shown}"
 
 def test_errors_json(directory):
     """Check *.errors.json files in directory against the jmc-errors meta model."""
