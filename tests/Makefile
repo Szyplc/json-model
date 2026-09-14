@@ -24,6 +24,9 @@ D.clean.pl = $(D.subs:%=%.clean.pl)
 D.sql = $(D.subs:%=%.sql)
 D.clean.sql = $(D.subs:%=%.clean.sql)
 D.ts = $(D.subs:%=%.ts)
+D.auto.subs = $(filter-out bads,$(D.subs))
+D.auto = $(D.auto.subs:%=%.auto)
+D.clean.auto = $(D.auto.subs:%=%.clean.auto)
 D.clean.ts = $(D.valid:%.ts.valid=%.clean.ts)
 # schema
 D.schema = $(D.subs:%=%.schema)
@@ -132,6 +135,18 @@ schema:
 .PHONY: clean.schema
 clean.schema:
 	$(MAKE) TARGET=clean.schema $(D.clean.schema)
+
+.PHONY: auto
+auto:
+	$(MAKE) TARGET=auto $(D.auto)
+
+.PHONY: clean.auto
+clean.auto:
+	$(MAKE) TARGET=clean.auto $(D.clean.auto)
+
+.PHONY: check.diverges
+check.diverges:
+	./check-diverges.sh
 
 # show statistics about tests
 .PHONY: stats

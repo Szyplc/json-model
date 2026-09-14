@@ -258,7 +258,7 @@ EXPECT: dict[str, int] = {
     "mv-35:cmp-opts": {"report": False, "comment": False},
     "mv-35:mod-opts": {"single_line": True},
     "mv-35:models": 7,
-    "mv-35:values": 176,
+    "mv-35:values": 186,
     "mv-35:verrors:schema": 1,
     # mv-36
     "mv-36:models": 7,
@@ -538,7 +538,7 @@ def test_ts(directory, tmp_dir):
         fin = fname.replace(".model.json", "").replace(f"./{directory}/", "./")
         bname = fpath.name.replace(".model.json", "")
         ntests += 1
-        declared = expected_errors(directory, bname).get("ts", False)
+        declared = expected_flag(directory, bname, "ts")
 
         try:
             jm = model_from_url(fin, resolver=resolver, auto=True, follow=True, **mod_opts)
@@ -575,22 +575,55 @@ def test_ts(directory, tmp_dir):
 
     assert ntests == EXPECT.get(f"{directory}:models", 0)
 
-def expected_errors(directory: pathlib.Path, model: str) -> dict[str, list[int]]:
-    """Expected errors for a model"""
+def errors_file(directory: pathlib.Path, model: str) -> dict:
+    """Contents of the errors file of a model, without its comments"""
     efile = directory.joinpath(f"{model}.errors.json")
     if not efile.exists():
         return {}
     with open(efile) as ef:
         return { k: v for k, v in json.load(ef).items() if not k.startswith("#") }
 
-def check_errors(directory: pathlib.Path, model: str, key: str, observed: set[int]):
+def expected_flag(directory: pathlib.Path, model: str, name: str, default=False):
+    """Whole model flag stated by an errors file, beside its test vector sources"""
+    return errors_file(directory, model).get(name, default)
+
+def expected_errors(directory: pathlib.Path, model: str,
+                    source: str = "values") -> dict[str, list[int]]:
+    """Expected errors for a model on one test vector source"""
+    section = errors_file(directory, model).get(source, {})
+    return { k: v for k, v in section.items() if not k.startswith("#") }
+
+def check_errors(directory: pathlib.Path, model: str, key: str, observed: set[int],
+                 source: str = "values"):
     """Compare observed checker errors to expectations"""
-    expected = set(expected_errors(directory, model).get(key) or [])
+    expected = set(expected_errors(directory, model, source).get(key) or [])
 
     missing, extra = expected - observed, observed - expected
     assert not missing and not extra, \
-        f"{directory}/{model}.values.json [{key}]: " \
+        f"{directory}/{model}.{source}.json [{key}]: " \
         f"missing={sorted(missing)} extra={sorted(extra)}"
+
+def run_vectors(fexec: str, opts: str, vfile: pathlib.Path,
+                source: str) -> tuple[str, int, set[int]]:
+    """Run a checker on a test vector file, keeping the indexes it disagrees about"""
+    with os.popen(f"{fexec} {opts} -t {vfile} | cut -d/ -f2-") as p:
+        result = p.read()
+
+    observed: set[int] = set()
+    nvalues = 0
+
+    for line in result.split("\n")[:-1]:
+        m = re.search(rf"\.{source}\.json\[(\d+)\]: (\w+)", line)
+        if m is None:
+            # continuation of a reported reason holding an end of line
+            assert nvalues, f"unexpected output on {vfile}: {line}"
+            continue
+        nvalues += 1
+        if m.group(2) == "ERROR":
+            observed.add(int(m.group(1)))
+
+    assert result, f"no output from {fexec} on {vfile}"
+    return result, nvalues, observed
 
 def check_values(
             tname: str,    # test model, eg "./mv-00/foo"
@@ -613,6 +646,7 @@ def check_values(
     dname = tname.split("/", -2)[-2]
 
     directory = pathlib.Path(dname)
+    lang = suffix[1:]
 
     # run on all validations
     # true/false value files
@@ -646,25 +680,25 @@ def check_values(
             nvalues += len(list(filter(lambda t: isinstance(t, list), values)))
             return
 
-        with os.popen(f"{fexec} {opts} -t {vfile} | cut -d/ -f2-") as p:
-            result = p.read()
+        result, nseen, observed = run_vectors(fexec, opts, vfile, "values")
+        nvalues += nseen
         out += result
 
-        lang = suffix[1:]
-        observed: set[int] = set()
-
-        for line in result.split("\n")[:-1]:
-            nvalues += 1
-            m = re.search(r"\.values\.json\[(\d+)\]: (\w+)", line)
-            assert m is not None, f"unexpected output in {directory}/{bname}:{line}"
-
-            idx, verdict = int(m.group(1)), m.group(2)
-            if verdict == "ERROR":
-                observed.add(idx)
-
-        assert result, f"no output from {fexec} on {vfile}"
         check_errors(directory, bname, lang, observed)
         assert out == ref
+
+    # generated values file
+    afile = directory.joinpath(bname + ".auto.json")
+
+    if afile.exists():
+
+        with open(afile) as af:
+            generated = json.load(af)
+
+        # a model the generator cannot handle yields comments only
+        if any(isinstance(t, list) for t in generated):
+            _, _, observed = run_vectors(fexec, opts, afile, "auto")
+            check_errors(directory, bname, lang, observed, "auto")
 
     # cleanup
     if suffix.endswith(".c"):
@@ -1028,6 +1062,38 @@ def test_values_json(directory):
         get_json_file,
         EXPECT.get(f"{directory}:models"),
     )
+
+def unsettled_vectors(fpath: pathlib.Path) -> list[tuple[int, list]]:
+    """Ordinal and contents of the test vectors of a file which state no result."""
+    with open(fpath) as f:
+        vectors = [t for t in json.load(f) if isinstance(t, list)]
+    return [(i, t) for i, t in enumerate(vectors) if t[0] is None]
+
+def test_auto_json(directory):
+    """Check that generated test vectors in directory all carry a verdict."""
+    for fpath in sorted(directory.glob("*.auto.json")):
+        unsettled = unsettled_vectors(fpath)
+        if not unsettled:
+            continue
+
+        vfile = str(fpath).replace(".auto.json", ".values.json")
+        shown = "\n".join(f"  [ null, {json.dumps(t[-1])} ],  # was auto[{i}]"
+                           for i, t in unsettled)
+        assert False, \
+            f"{fpath}: {len(unsettled)} vector(s) without a verdict, " \
+            f"state each one in {vfile}:\n{shown}"
+
+def test_values_settled(directory):
+    """Check that hand written test vectors in directory all carry a verdict."""
+    for fpath in sorted(directory.glob("*.values.json")):
+        unsettled = unsettled_vectors(fpath)
+        if not unsettled:
+            continue
+
+        shown = "\n".join(f"  [{i}] {json.dumps(t[-1])}" for i, t in unsettled)
+        assert False, \
+            f"{fpath}: {len(unsettled)} vector(s) waiting for a verdict, " \
+            f"set true or false on each:\n{shown}"
 
 def test_errors_json(directory):
     """Check *.errors.json files in directory against the jmc-errors meta model."""
