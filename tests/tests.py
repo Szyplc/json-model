@@ -1262,7 +1262,8 @@ def test_sanity(directory):
     assert len(SUFFIXES) == 18
     files: dict[str, list[pathlib.Path]] = {}
     for suffix in SUFFIXES:
-        files[suffix] = sorted(str(fn) for fn in directory.glob(f"*.{suffix}"))
+        files[suffix] = sorted(str(fn) for fn in directory.glob(f"*.{suffix}")
+                               if ".auto." not in fn.name)
     # avoid *.model.js
     files["js"] = [ fn for fn in files["js"] if not fn.endswith(".model.js") ]
     # number of mandatory files
