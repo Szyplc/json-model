@@ -50,6 +50,18 @@ F.plc   = $(F.root:%=%.pl.check)
 F.jvc   = $(F.root:%=%.java.check)
 F.schc  = $(F.root:%=%.schema.check)
 
+# generated test vectors
+F.auto       = $(F.root:%=%.auto.json)
+F.auto.check = $(F.root:%=%.auto.check)
+F.auto.cc    = $(F.root:%=%.auto.c.check)
+F.auto.pyc   = $(F.root:%=%.auto.py.check)
+F.auto.jsc   = $(F.root:%=%.auto.js.check)
+F.auto.sqlc  = $(F.root:%=%.auto.sql.check)
+F.auto.plc   = $(F.root:%=%.auto.pl.check)
+F.auto.jvc   = $(F.root:%=%.auto.java.check)
+F.auto.lang  = $(F.auto.cc) $(F.auto.pyc) $(F.auto.jsc) \
+               $(F.auto.sqlc) $(F.auto.plc) $(F.auto.jvc)
+
 F.tsv   = $(F.root:%=%.ts.valid)
 
 DASHED  = $(wildcard *-*.model.json)
@@ -60,7 +72,8 @@ FD.java = $(subst -,_,$(DASHED:%.model.json=%.java))
 F.gen   = \
     $(F.json) $(F.UO) $(F.PO) $(F.ts) \
     $(F.c) $(F.py) $(F.cc) $(F.sql) $(F.pl) $(F.java) $(F.EO) \
-    $(F.tsv) $(F.pyc) $(F.js) $(F.jsc) $(F.sqlc) $(F.plc) $(F.jvc) $(F.schc)
+    $(F.tsv) $(F.pyc) $(F.js) $(F.jsc) $(F.sqlc) $(F.plc) $(F.jvc) $(F.schc) \
+    $(F.auto) $(F.auto.lang)
 
 .PHONY: all
 all: $(F.gen)
@@ -442,8 +455,6 @@ check.schema: $(F.sXc)
 
 # Automatically Generated Test Vectors
 
-F.auto       = $(F.root:%=%.auto.json)
-F.auto.check = $(F.root:%=%.auto.check)
 BACKENDS     = py js pl c java
 
 .SECONDARY: $(F.auto)
@@ -480,14 +491,75 @@ BACKENDS     = py js pl c java
 	  }'
 	exit 0
 
-.PHONY: auto clean.auto
+# per backend output on the generated test vectors, as for the values file
+
+%.auto.c.check: %.out %.auto.json
+	./$< -tr $*.auto.json > $@
+	status=$$?
+	if [ $$status -ne 0 ] ; then
+	    test -f $*.errors.json && status=0
+	fi
+	exit $$status
+
+%.auto.py.check: %.py %.auto.json
+	./$< -tr $*.auto.json > $@
+	status=$$?
+	if [ $$status -ne 0 ] ; then
+	    test -f $*.errors.json && status=0
+	fi
+	exit $$status
+
+%.auto.js.check: %.js %.auto.json
+	./$< -tr $*.auto.json > $@
+	status=$$?
+	if [ $$status -ne 0 ] ; then
+	    test -f $*.errors.json && status=0
+	fi
+	exit $$status
+
+%.auto.sql.check: %.sql %.auto.json ../test_sql_csv.sql ../test_sql.sh
+	if [ -e $*.sql.check.skip ] ; then
+	    echo "skipped" > $@
+	    exit 0
+	fi
+	../test_sql.sh $< $*.auto.json > $@
+	status=$$?
+	if [ $$status -ne 0 ] ; then
+	    test -f $*.errors.json && status=0
+	fi
+	# FIXME as for %.sql.check
+	exit 0
+
+%.auto.pl.check: %.pl %.auto.json
+	./$< -t -r $*.auto.json > $@
+	status=$$?
+	if [ $$status -ne 0 ] ; then
+	    test -f $*.errors.json && status=0
+	fi
+	exit $$status
+
+%.auto.java.check: %.class %.auto.json
+	java_name=$*
+	java_name=$${java_name//-/_}
+	[ $* != $$java_name ] && ln -s $*.class $$java_name.class
+	$(JAVA) $$java_name $(J.opt) -t $*.auto.json > $@
+	status=$$?
+	if [ $$status -ne 0 ] ; then
+	    test -f $*.errors.json && status=0
+	fi
+	[ $* != $$java_name ] && $(RM) $$java_name.class
+	exit $$status
+
+.PHONY: auto auto.lang clean.auto
 auto:
 	$(MAKE) $(F.out) $(F.class) || true
 	$(MAKE) $(F.auto.check)
 	grep -h "DISAGREEMENT\|MISMATCH" $(F.auto.check) || echo "# no finding"
 
+auto.lang: $(F.auto.lang)
+
 clean.auto:
-	$(RM) $(F.auto) $(F.auto.check)
+	$(RM) $(F.auto) $(F.auto.check) $(F.auto.lang)
 
 .PHONY: stats
 stats:

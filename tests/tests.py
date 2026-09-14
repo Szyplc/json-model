@@ -701,8 +701,16 @@ def check_values(
 
         # a model the generator cannot handle yields comments only
         if any(isinstance(t, list) for t in generated):
-            _, _, observed = run_vectors(fexec, opts, afile, "auto")
-            check_errors(directory, bname, lang, observed, "auto")
+
+            aref_file = fname.replace(suffix, ".auto" + refsuff)
+            with open(aref_file) as r:
+                aref = r.read()
+
+            if aref.strip() != "skipped":
+                result, _, observed = run_vectors(fexec, opts, afile, "auto")
+
+                check_errors(directory, bname, lang, observed, "auto")
+                assert result == aref
 
     # cleanup
     if suffix.endswith(".c"):
