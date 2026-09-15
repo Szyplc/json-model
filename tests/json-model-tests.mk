@@ -51,16 +51,7 @@ F.jvc   = $(F.root:%=%.java.check)
 F.schc  = $(F.root:%=%.schema.check)
 
 # generated test vectors
-F.auto       = $(F.root:%=%.auto.json)
-F.auto.check = $(F.root:%=%.auto.check)
-F.auto.cc    = $(F.root:%=%.auto.c.check)
-F.auto.pyc   = $(F.root:%=%.auto.py.check)
-F.auto.jsc   = $(F.root:%=%.auto.js.check)
-F.auto.sqlc  = $(F.root:%=%.auto.sql.check)
-F.auto.plc   = $(F.root:%=%.auto.pl.check)
-F.auto.jvc   = $(F.root:%=%.auto.java.check)
-F.auto.lang  = $(F.auto.cc) $(F.auto.pyc) $(F.auto.jsc) \
-               $(F.auto.sqlc) $(F.auto.plc) $(F.auto.jvc)
+F.auto  = $(F.root:%=%.auto.json)
 
 F.tsv   = $(F.root:%=%.ts.valid)
 
@@ -73,7 +64,7 @@ F.gen   = \
     $(F.json) $(F.UO) $(F.PO) $(F.ts) \
     $(F.c) $(F.py) $(F.cc) $(F.sql) $(F.pl) $(F.java) $(F.EO) \
     $(F.tsv) $(F.pyc) $(F.js) $(F.jsc) $(F.sqlc) $(F.plc) $(F.jvc) $(F.schc) \
-    $(F.auto) $(F.auto.lang)
+    $(F.auto)
 
 .PHONY: all
 all: $(F.gen)
@@ -201,7 +192,7 @@ schema: $(F.EO) $(F.schc)
 	$(JMC.cmd) -EO -ns ./$< > $@
 
 # jsu-check -e jsonschema -t ./$< ./$*.values.json > $@
-%.schema.check: %.schema.json
+%.schema.check: %.schema.json %.auto.json
 	shopt -s nullglob
 	set -o pipefail
 	if [ -e $@.skip ] ; then
@@ -209,7 +200,7 @@ schema: $(F.EO) $(F.schc)
 	  exit 0
 	fi
 	# jsu-compile --backend f $< $*.*.{true,false}.json | sort > $@
-	jsu-compile --backend f $< -- -tv ./$*.values.json >> $@
+	jsu-compile --backend f $< -- -tv ./$*.values.json ./$*.auto.json >> $@
 	status=$$?
 	if [ $$status -ne 0 ] ; then
 	    test -f $*.errors.json && status=0
@@ -276,11 +267,11 @@ $(F.out): json-model.o main.o
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LDFLAGS) -o $@
 
 # TODO check precise errors!
-%.c.check: %.out %.values.json
+%.c.check: %.out %.values.json %.auto.json
 	shopt -s nullglob
 	set -o pipefail
 	./$< -r $*.*.{true,false}.json | sort > $@
-	./$< -tr $*.values.json >> $@
+	./$< -tr $*.values.json $*.auto.json >> $@
 	status=$$?
 	if [ $$status -ne 0 ] ; then
 	    test -f $*.errors.json && status=0
@@ -307,11 +298,11 @@ ir: $(F.ir)
 	$(JMC.cmd) -v -o $@ ./$<
 	chmod a+rx $@
 
-%.py.check: %.py %.values.json
+%.py.check: %.py %.values.json %.auto.json
 	shopt -s nullglob
 	set -o pipefail
 	./$< -r $*.*.{true,false}.json | sort > $@
-	./$< -tr $*.values.json >> $@
+	./$< -tr $*.values.json $*.auto.json >> $@
 	status=$$?
 	if [ $$status -ne 0 ] ; then
 	    test -f $*.errors.json && status=0
@@ -325,11 +316,11 @@ ir: $(F.ir)
 	$(JMC.cmd) -v -o $@ $<
 	chmod a+rx $@
 
-%.js.check: %.js %.values.json
+%.js.check: %.js %.values.json %.auto.json
 	shopt -s nullglob
 	set -o pipefail
 	./$< -r $*.*.{true,false}.json | sort > $@
-	./$< -tr $*.values.json >> $@
+	./$< -tr $*.values.json $*.auto.json >> $@
 	status=$$?
 	if [ $$status -ne 0 ] ; then
 	    test -f $*.errors.json && status=0
@@ -342,16 +333,19 @@ ir: $(F.ir)
 %.sql: %.model.json
 	$(JMC.cmd) --no-reporting -o $@ $<
 
-%.values.csv: %.values.json
-	../values2csv.py $< $@
+# FIXME
 
-%.sql.check: %.sql %.values.json ../test_sql_csv.sql ../test_sql.sh
+%.values.csv: %.values.json %.auto.json
+	../values2csv.py $*.values.json > $@
+	../values2csv.py $*.auto.json >> $@
+
+%.sql.check: %.sql %.values.json %.auto.json ../test_sql_csv.sql ../test_sql.sh
 	shopt -s nullglob
 	if [ -e $*.sql.check.skip ] ; then
 	    echo "skipped" > $@
 	    exit 0
 	fi
-	../test_sql.sh $< $*.*.true.json $*.*.false.json $*.values.json > $@
+	../test_sql.sh $< $*.*.true.json $*.*.false.json $*.values.json $*.auto.json > $@  # FIXME
 	status=$$?
 	if [ $$status -ne 0 ] ; then
 	    test -f $*.errors.json && status=0
@@ -368,11 +362,11 @@ ir: $(F.ir)
 
 # NOTE no -r for now
 # TODO check for specific pl error
-%.pl.check: %.pl %.values.json
+%.pl.check: %.pl %.values.json %.auto.json
 	shopt -s nullglob
 	set -o pipefail
 	./$< $*.*.{true,false}.json | sort > $@
-	./$< -t -r $*.values.json >> $@
+	./$< -t -r $*.values.json $*.auto.json >> $@
 	status=$$?
 	if [ $$status -ne 0 ] ; then
 	    test -f $*.errors.json && status=0
@@ -409,14 +403,14 @@ java: $(F.java) $(F.jvc)
 	}
 	exit $$status
 
-%.java.check: %.class %.values.json
+%.java.check: %.class %.values.json %.auto.json
 	shopt -s nullglob
 	set -o pipefail
 	java_name=$*
 	java_name=$${java_name//-/_}
 	[ $* != $$java_name ] && ln -s $*.class $$java_name.class
 	$(JAVA) $$java_name $(J.opt) $*.*.{true,false}.json | sort > $@
-	$(JAVA) $$java_name $(J.opt) -t $*.values.json >> $@
+	$(JAVA) $$java_name $(J.opt) -t $*.values.json $*.auto.json >> $@
 	status=$$?
 	if [ $$status -ne 0 ] ; then
 	    test -f $*.errors.json && status=0
@@ -440,7 +434,8 @@ check.schema: $(F.sXc)
 	    $*.js $*.js.check \
 	    $*.sql $*.sql.check \
 	    $*.pl $*.pl.check \
-	    $*.java $*.java.check
+	    $*.java $*.java.check \
+	    $*.auto.json
 
 %.CLEAN:
 	$(RM) $*.schema.json \
@@ -449,7 +444,8 @@ check.schema: $(F.sXc)
 	    $*.js $*.js.check \
 	    $*.sql $*.sql.check \
 	    $*.pl $*.pl.check \
-	    $*.java $*.java.check
+	    $*.java $*.java.check \
+	    $*.auto.json
 
 # TODO JSON Schema checks on test values?
 
@@ -460,108 +456,18 @@ BACKENDS     = py js pl c java
 .SECONDARY: $(F.auto)
 
 %.auto.json: %.model.json
-	$(JMC.cmd) --auto-values -o $@ $<
-
-%.auto.check: %.auto.json
-	exec > $@
-	echo "# $<"
-	for b in $(BACKENDS) ; do
-	  case $$b in
-	  py|js|pl) [ -x ./$*.$$b ] && ./$*.$$b -t $< ;;
-	  c)        [ -x ./$*.out ] && ./$*.out -t $< ;;
-	  java)     if [ -f $*.class ] ; then
-	              n=$$(echo $* | tr - _)
-	              [ $$n != $* ] && ln -sf $*.class $$n.class
-	              $(JAVA) $$n -t $<
-	              [ $$n != $* ] && $(RM) $$n.class
-	            fi ;;
-	  esac 2>/dev/null |
-	    sed -n "s/.*\[\([0-9]*\)\]: ERROR unexpected \([A-Z]*\).*/$$b \1 \2 !/p
-	            s/.*\[\([0-9]*\)\]: \([A-Z]*\).*/$$b \1 \2/p"
-	done | awk '
-	  { got[$$2] = got[$$2] " " $$1 "=" $$3
-	    if ($$4 == "!") bad[$$2] = bad[$$2] " " $$1
-	    if (!(($$2 "," $$3) in kind)) { kind[$$2 "," $$3] = 1 ; kinds[$$2]++ }
-	    if ($$2 + 1 > n) n = $$2 + 1 }
-	  END {
-	    for (i = 0 ; i < n ; i++)
-	      print "[" i "]" got[i] \
-	            (kinds[i] > 1 ? "  DISAGREEMENT" : "") \
-	            (i in bad ? "  MISMATCH:" bad[i] : "")
-	  }'
-	exit 0
+	$(JMC.cmd) --auto-values --values $*.values.json -o $@ $<
 
 # per backend output on the generated test vectors, as for the values file
 
-%.auto.c.check: %.out %.auto.json
-	./$< -tr $*.auto.json > $@
-	status=$$?
-	if [ $$status -ne 0 ] ; then
-	    test -f $*.errors.json && status=0
-	fi
-	exit $$status
+.PHONY: auto
+auto: $(F.auto)
 
-%.auto.py.check: %.py %.auto.json
-	./$< -tr $*.auto.json > $@
-	status=$$?
-	if [ $$status -ne 0 ] ; then
-	    test -f $*.errors.json && status=0
-	fi
-	exit $$status
-
-%.auto.js.check: %.js %.auto.json
-	./$< -tr $*.auto.json > $@
-	status=$$?
-	if [ $$status -ne 0 ] ; then
-	    test -f $*.errors.json && status=0
-	fi
-	exit $$status
-
-%.auto.sql.check: %.sql %.auto.json ../test_sql_csv.sql ../test_sql.sh
-	if [ -e $*.sql.check.skip ] ; then
-	    echo "skipped" > $@
-	    exit 0
-	fi
-	../test_sql.sh $< $*.auto.json > $@
-	status=$$?
-	if [ $$status -ne 0 ] ; then
-	    test -f $*.errors.json && status=0
-	fi
-	# FIXME as for %.sql.check
-	exit 0
-
-%.auto.pl.check: %.pl %.auto.json
-	./$< -t -r $*.auto.json > $@
-	status=$$?
-	if [ $$status -ne 0 ] ; then
-	    test -f $*.errors.json && status=0
-	fi
-	exit $$status
-
-%.auto.java.check: %.class %.auto.json
-	java_name=$*
-	java_name=$${java_name//-/_}
-	[ $* != $$java_name ] && ln -s $*.class $$java_name.class
-	$(JAVA) $$java_name $(J.opt) -t $*.auto.json > $@
-	status=$$?
-	if [ $$status -ne 0 ] ; then
-	    test -f $*.errors.json && status=0
-	fi
-	[ $* != $$java_name ] && $(RM) $$java_name.class
-	exit $$status
-
-.PHONY: auto auto.lang clean.auto
-auto:
-	$(MAKE) $(F.out) $(F.class) || true
-	$(MAKE) $(F.auto.check)
-	grep -h "DISAGREEMENT\|MISMATCH" $(F.auto.check) || echo "# no finding"
-
-auto.lang: $(F.auto.lang)
-
+.PHONY: clean.auto
 clean.auto:
-	$(RM) $(F.auto) $(F.auto.check) $(F.auto.lang)
+	$(RM) $(F.auto)
 
 .PHONY: stats
 stats:
 	@echo "# models:" $$(ls *.model.json | wc -l)
-	echo "# vector tests:" $$(grep "^  *\[" *.values.json | wc -l)
+	echo "# vector tests:" $$(grep "^  *\[" *.values.json *.auto.json | wc -l)
