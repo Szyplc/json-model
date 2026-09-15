@@ -520,6 +520,91 @@ def _errors_added(text: str, base: int|None,
     added = "".join(f"{lead if rank == 0 else ','}{gap}{m}" for rank, m in enumerate(members))
     return (len(head), close, added + text[len(head):close])
 
+def _errors_drop_members(text: str, base: int, to_drop: set[str]) -> str:
+    """Remove named members from a JSON object in source text, preserving layout."""
+    members = _errors_members(text, base)
+    if not any(name in to_drop for name, *_ in members):
+        return text
+    obj_start = text.index("{", base)
+    close = _errors_close(text, base)
+
+    entries: list[tuple[str, str, int, bool]] = []
+    prev_end = obj_start + 1
+    for name, _, nstart, _vstart, vend in members:
+        prefix = text[prev_end:nstart]
+        raw = text[nstart:vend]
+        keep = name not in to_drop
+        entries.append((prefix, raw, vend, keep))
+        j = vend
+        n = len(text)
+        while j < n and text[j].isspace():
+            j += 1
+        if j < n and text[j] == ",":
+            j += 1
+        prev_end = j
+
+    kept = [(prefix, raw, vend) for prefix, raw, vend, keep in entries if keep]
+    if not kept:
+        return text[:obj_start + 1] + text[close:]
+
+    result = text[:obj_start + 1]
+    for idx, (prefix, raw, _vend) in enumerate(kept):
+        if idx == 0:
+            result += prefix + raw
+        else:
+            result += "," + prefix + raw
+
+    last_member_vend = members[-1][4]
+    result += text[last_member_vend:close] + text[close:]
+    return result
+
+def _errors_cleanup_empty(text: str) -> tuple[str, int]:
+    """Remove empty index-list members (and empty parent sections) from an errors file source."""
+    removals = 0
+    for section in _ERRORS_SOURCES:
+        try:
+            top_members = _errors_members(text)
+        except (ValueError, IndexError):
+            break
+        section_entry = next(
+            ((name, value, nstart, start, end)
+             for name, value, nstart, start, end in top_members
+             if name == section and isinstance(value, dict)),
+            None
+        )
+        if section_entry is None:
+            continue
+        _, _, sec_nstart, sec_vstart, _ = section_entry
+        try:
+            inner = _errors_members(text, sec_vstart - 1)
+        except (ValueError, IndexError):
+            continue
+        empty_names = {
+            name for name, value, _, _, _ in inner
+            if not name.startswith("#") and _errors_indexes(value) and len(value) == 0
+        }
+        if not empty_names:
+            continue
+        removals += len(empty_names)
+        text = _errors_drop_members(text, sec_vstart - 1, empty_names)
+        try:
+            top_members2 = _errors_members(text)
+        except (ValueError, IndexError):
+            break
+        section_entry2 = next(
+            ((name, value, nstart2, start2, end2)
+             for name, value, nstart2, start2, end2 in top_members2
+             if name == section),
+            None
+        )
+        if section_entry2 is None:
+            continue
+        _, value2, _, _, _ = section_entry2
+        if isinstance(value2, dict) and len(value2) == 0:
+            removals += 1
+            text = _errors_drop_members(text, 0, {section})
+    return text, removals
+
 def _renumber_errors(path: str, vshift: dict[int, int], ashift: dict[int, int]|None,
                      moved: dict[int, int], errors_file: str|None = None) -> None:
     """Move the test vector indexes of the errors file beside a values file."""
@@ -579,13 +664,20 @@ def _renumber_errors(path: str, vshift: dict[int, int], ashift: dict[int, int]|N
         log.error(f"{epath}: moved errors dropped, auto is not an object")
     elif gained:
         edits.append(_errors_added(text, starts.get("auto"), gained))
-    if not edits:
+    if edits:
+        for start, end, rendered in sorted(edits, reverse=True):
+            text = text[:start] + rendered + text[end:]
+    text, cleaned = _errors_cleanup_empty(text)
+    if not edits and not cleaned:
         return
-    for start, end, rendered in sorted(edits, reverse=True):
-        text = text[:start] + rendered + text[end:]
     with open(epath, "w", newline="") as f:
         f.write(text)
-    log.warning(f"{epath}: {len(edits)} expected error list(s) updated")
+    parts = []
+    if edits:
+        parts.append(f"{len(edits)} expected error list(s) updated")
+    if cleaned:
+        parts.append(f"{cleaned} empty member(s) removed")
+    log.warning(f"{epath}: {', '.join(parts)}")
 
 def _merge_values(tests: list, path: str, values: list, auto: list|None = None,
                   errors_file: str|None = None) -> list:
