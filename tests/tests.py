@@ -795,9 +795,11 @@ def run_dyn(directory: pathlib.Path, gen_checker: GenChecker, name: str):
             else:
                 assert not checker(value)
 
-        # process values file
-        vfile = directory.joinpath(f"{model}.values.json")
-        if vfile.exists():
+        # process test vector files
+        for vfile in (directory.joinpath(f"{model}.values.json"),
+                      directory.joinpath(f"{model}.auto.json")):
+            if not vfile.exists():
+                continue
             values = json.loads(vfile.read_text())
             assert isinstance(values, list)
 
@@ -821,7 +823,7 @@ def run_dyn(directory: pathlib.Path, gen_checker: GenChecker, name: str):
                     nverrors += 1
                     continue
 
-                log.debug(f"{model}.values.json[{index}]")
+                log.debug(f"{vfile.name}[{index}]")
 
                 try:
                     if expect:
@@ -829,13 +831,13 @@ def run_dyn(directory: pathlib.Path, gen_checker: GenChecker, name: str):
                     else:
                         assert not checker(value, case)
                 except NotSupportedError as e:
-                    log.error(f"{name} not supported error on {model}.values.json[{index}]")
+                    log.error(f"{name} not supported error on {vfile.name}[{index}]")
                     nverrors += 1
                 except AssertionError as e:
-                    log.error(f"{name} assert error on {model}.values.json[{index}]")
+                    log.error(f"{name} assert error on {vfile.name}[{index}]")
                     nverrors += 1
                 except Exception as e:
-                    log.error(f"{name} internal checker error on {model}.values.json[{index}]")
+                    log.error(f"{name} internal checker error on {vfile.name}[{index}]")
                     nverrors += 1
 
     assert nfiles == EXPECT.get(f"{directory}:models")
