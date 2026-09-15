@@ -2089,7 +2089,11 @@ def vectors(model: ModelType, resolver: Resolver|None = None, url: str = "",
     reasons: list[str] = []
     taken: set[str] = set()
     try:
-        valid = simplest(model, resolver=resolver, url=url, extend=extend)
+        jm, compiled = _compile(model, True, resolver, url, extend)
+    except UnsupportedValue as e:
+        raise UnsupportedValue(f"no test vector: {e}")
+    try:
+        valid = simplest(compiled, jm)
         entries.append((0, ".", ["# . simplest", [True, valid]]))
         taken.add(json.dumps(valid, sort_keys=True))
     except Vacuous as e:
@@ -2100,7 +2104,7 @@ def vectors(model: ModelType, resolver: Resolver|None = None, url: str = "",
         entries.append((0, ".", _note(f". simplest: {e}", "FAILED")[1]))
     try:
         marks: set[str] = set()
-        found = bounds(model, resolver=resolver, url=url, extend=extend, marks=marks)
+        found = bounds(compiled, jm, marks=marks)
         for key, value in found.items():
             dumped = json.dumps(value, sort_keys=True)
             if dumped in taken:
@@ -2116,8 +2120,7 @@ def vectors(model: ModelType, resolver: Resolver|None = None, url: str = "",
     for step, generate in (("optional", optionals), ("branch", branches)):
         try:
             step_marks: set[str] = set()
-            found, skipped, doubled = generate(model, resolver=resolver, url=url,
-                                               extend=extend, marks=step_marks)
+            found, skipped, doubled = generate(compiled, jm, marks=step_marks)
             for key, value in found.items():
                 dumped = json.dumps(value, sort_keys=True)
                 if dumped in taken:
@@ -2136,8 +2139,7 @@ def vectors(model: ModelType, resolver: Resolver|None = None, url: str = "",
             entries.append((0, ".", _note(f"{step} values: {e}", "FAILED")[1]))
     try:
         broken_marks: set[str] = set()
-        broken, skipped, doubled, lost = _violations(model, resolver=resolver, url=url,
-                                                     extend=extend, marks=broken_marks,
+        broken, skipped, doubled, lost = _violations(compiled, jm, marks=broken_marks,
                                                      valid=frozenset(taken))
         for key, value in broken.items():
             entries.append((1, _path(key), [_label(key, broken_marks), [False, value]]))
