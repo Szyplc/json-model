@@ -607,26 +607,33 @@ def check_errors(directory: pathlib.Path, model: str, key: str, observed: set[in
         f"{directory}/{model}.{source}.json [{key}]: " \
         f"missing={sorted(missing)} extra={sorted(extra)}"
 
-def run_vectors(fexec: str, opts: str, vfile: pathlib.Path,
-                source: str) -> tuple[str, int, set[int]]:
-    """Run a checker on a test vector file, keeping the indexes it disagrees about"""
-    with os.popen(f"{fexec} {opts} -t {vfile} | cut -d/ -f2-") as p:
+_VECTOR_LINE = re.compile(r"\.(values|auto)\.json\[(\d+)\]: (\w+)")
+
+def vector_source(vfile: pathlib.Path) -> str:
+    """Test vector source held by a file, hand written or generated"""
+    return "auto" if vfile.name.endswith(".auto.json") else "values"
+
+def run_vectors(fexec: str, opts: str,
+                vfiles: list[pathlib.Path]) -> tuple[str, int, dict[str, set[int]]]:
+    """Run a checker on test vector files, keeping the indexes it disagrees about"""
+    files = " ".join(str(f) for f in vfiles)
+    with os.popen(f"{fexec} {opts} -t {files} | cut -d/ -f2-") as p:
         result = p.read()
 
-    observed: set[int] = set()
+    observed: dict[str, set[int]] = { vector_source(f): set() for f in vfiles }
     nvalues = 0
 
     for line in result.split("\n")[:-1]:
-        m = re.search(rf"\.{source}\.json\[(\d+)\]: (\w+)", line)
+        m = _VECTOR_LINE.search(line)
         if m is None:
             # continuation of a reported reason holding an end of line
-            assert nvalues, f"unexpected output on {vfile}: {line}"
+            assert nvalues, f"unexpected output on {files}: {line}"
             continue
         nvalues += 1
-        if m.group(2) == "ERROR":
-            observed.add(int(m.group(1)))
+        if m.group(3) == "ERROR":
+            observed[m.group(1)].add(int(m.group(2)))
 
-    assert result, f"no output from {fexec} on {vfile}"
+    assert result, f"no output from {fexec} on {files}"
     return result, nvalues, observed
 
 def check_values(
@@ -668,10 +675,10 @@ def check_values(
         with os.popen(f"{fexec} {opts} {vfiles} | cut -d/ -f2-") as p:
             out = p.read()
 
-    # values file
-    vfile = directory.joinpath(bname + ".values.json")
+    tvfiles = [ f for f in (directory.joinpath(bname + ".values.json"),
+                            directory.joinpath(bname + ".auto.json")) if f.exists() ]
 
-    if vfile.exists():
+    if tvfiles:
 
         ref_file = fname.replace(suffix, refsuff)
         with open(ref_file) as r:
@@ -679,38 +686,19 @@ def check_values(
 
         if ref.strip() == "skipped":
             # just count and proceed to the next
-            with open(vfile) as vf:
-                values = json.load(vf)
-            nvalues += len(list(filter(lambda t: isinstance(t, list), values)))
+            for tvfile in tvfiles:
+                with open(tvfile) as vf:
+                    values = json.load(vf)
+                nvalues += len(list(filter(lambda t: isinstance(t, list), values)))
             return
 
-        result, nseen, observed = run_vectors(fexec, opts, vfile, "values")
+        result, nseen, observed = run_vectors(fexec, opts, tvfiles)
         nvalues += nseen
         out += result
 
-        check_errors(directory, bname, lang, observed)
+        for source, indexes in observed.items():
+            check_errors(directory, bname, lang, indexes, source)
         assert out == ref
-
-    # generated values file
-    afile = directory.joinpath(bname + ".auto.json")
-
-    if afile.exists():
-
-        with open(afile) as af:
-            generated = json.load(af)
-
-        # a model the generator cannot handle yields comments only
-        if any(isinstance(t, list) for t in generated):
-
-            aref_file = fname.replace(suffix, ".auto" + refsuff)
-            with open(aref_file) as r:
-                aref = r.read()
-
-            if aref.strip() != "skipped":
-                result, _, observed = run_vectors(fexec, opts, afile, "auto")
-
-                check_errors(directory, bname, lang, observed, "auto")
-                assert result == aref
 
     # cleanup
     if suffix.endswith(".c"):
@@ -817,19 +805,23 @@ def run_dyn(directory: pathlib.Path, gen_checker: GenChecker, name: str):
                 if isinstance(tvect, str):
                     continue  # skip comments
                 assert isinstance(tvect, list)
-                ntests += 1
-                if checker is None:
-                    nverrors += 1
-                    continue
-
-                log.debug(f"{model}.values.json[{index}]")
                 assert len(tvect) in (2, 3)
                 if len(tvect) == 3:
                     expect, case, value = tvect
                 else:
                     expect, value = tvect
                     case = ""
-                assert isinstance(expect, bool) and isinstance(case, str)
+                assert isinstance(case, str)
+                if expect is None:
+                    continue
+                assert isinstance(expect, bool)
+
+                ntests += 1
+                if checker is None:
+                    nverrors += 1
+                    continue
+
+                log.debug(f"{model}.values.json[{index}]")
 
                 try:
                     if expect:
@@ -1081,19 +1073,17 @@ def unsettled_vectors(fpath: pathlib.Path) -> list[tuple[int, list]]:
         vectors = [t for t in json.load(f) if isinstance(t, list)]
     return [(i, t) for i, t in enumerate(vectors) if t[0] is None]
 
-def test_auto_settled(directory):
-    """Check that generated test vectors in directory all carry a verdict."""
-    for fpath in sorted(directory.glob("*.auto.json")):
+def test_vectors_settled(directory):
+    """Check that test vectors in directory all carry a verdict."""
+    for fpath in sorted(directory.glob("*.values.json")) + sorted(directory.glob("*.auto.json")):
         unsettled = unsettled_vectors(fpath)
         if not unsettled:
             continue
 
-        vfile = str(fpath).replace(".auto.json", ".values.json")
-        shown = "\n".join(f"  [ null, {json.dumps(t[-1])} ],  # was auto[{i}]"
-                           for i, t in unsettled)
+        shown = "\n".join(f"  [{i}] {json.dumps(t[-1])}" for i, t in unsettled)
         assert False, \
             f"{fpath}: {len(unsettled)} vector(s) without a verdict, " \
-            f"state each one in {vfile}:\n{shown}"
+            f"replace each null result:\n{shown}"
 
 def test_errors_json(directory):
     """Check *.errors.json files in directory against the jmc-errors meta model."""
@@ -1252,18 +1242,19 @@ def test_draft_next():
 
 # file consistency
 SUFFIXES: list[str] = [
-    "model.json", "values.json", "PO.json", "UO.json", "schema.json", "schema.check"
+    "model.json", "values.json", "auto.json", "PO.json", "UO.json",
+    "schema.json", "schema.check"
 ]
 
 for lang in [ "c", "py", "js", "sql", "pl", "java" ]:
     SUFFIXES.extend([ lang, f"{lang}.check" ])
 
 def test_sanity(directory):
-    assert len(SUFFIXES) == 18
+    assert len(SUFFIXES) == 19
     files: dict[str, list[pathlib.Path]] = {}
     for suffix in SUFFIXES:
         files[suffix] = sorted(str(fn) for fn in directory.glob(f"*.{suffix}")
-                               if ".auto." not in fn.name)
+                               if suffix == "auto.json" or ".auto." not in fn.name)
     # avoid *.model.js
     files["js"] = [ fn for fn in files["js"] if not fn.endswith(".model.js") ]
     # number of mandatory files
