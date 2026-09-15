@@ -521,11 +521,14 @@ def _errors_added(text: str, base: int|None,
     return (len(head), close, added + text[len(head):close])
 
 def _renumber_errors(path: str, vshift: dict[int, int], ashift: dict[int, int]|None,
-                     moved: dict[int, int]) -> None:
+                     moved: dict[int, int], errors_file: str|None = None) -> None:
     """Move the test vector indexes of the errors file beside a values file."""
-    if not path.endswith(_VALUES_SUFFIX):
-        return
-    epath = path[:-len(_VALUES_SUFFIX)] + _ERRORS_SUFFIX
+    if errors_file is not None:
+        epath = errors_file
+    else:
+        if not path.endswith(_VALUES_SUFFIX):
+            return
+        epath = path[:-len(_VALUES_SUFFIX)] + _ERRORS_SUFFIX
     if not os.path.isfile(epath):
         return
     try:
@@ -584,7 +587,8 @@ def _renumber_errors(path: str, vshift: dict[int, int], ashift: dict[int, int]|N
         f.write(text)
     log.warning(f"{epath}: {len(edits)} expected error list(s) updated")
 
-def _merge_values(tests: list, path: str, values: list, auto: list|None = None) -> list:
+def _merge_values(tests: list, path: str, values: list, auto: list|None = None,
+                  errors_file: str|None = None) -> list:
     """Test vectors to generate, those still waiting for a verdict left to a values file."""
     held = _values_held(values)
     kept: list = []
@@ -624,7 +628,8 @@ def _merge_values(tests: list, path: str, values: list, auto: list|None = None) 
     if removed:
         log.warning(f"{path}: {len(removed)} value(s) removed, now generated: {sorted(removed)}")
     _renumber_errors(path, _values_shift(values, set(removed)),
-                     _auto_shift(auto, kept) if auto is not None else None, moved)
+                     _auto_shift(auto, kept) if auto is not None else None, moved,
+                     errors_file)
     return kept
 
 def jmc_script(xargs: list[str]|None = None) -> int:
@@ -766,6 +771,9 @@ def jmc_script(xargs: list[str]|None = None) -> int:
         help="read values from a test vector file")
     arg("--values", dest="values_file", type=str,
         help="test values file to read and update")
+    arg("--errors", dest="errors_file", type=str, default=None,
+        help="errors file to update (default: derived from --values file by replacing"
+             " .values.json with .errors.json)")
     arg("--jsonl", "-j", action="store_true", default=False,
         help="accept value file in JSONL format")
     arg("--yaml", action="store_true", default=None,
@@ -1239,7 +1247,8 @@ def jmc_script(xargs: list[str]|None = None) -> int:
             log.warning(f"{args.model}: {e}")
             tests, comment = [], f"# generated from {args.model}: {e}"
         if test_values is not None:
-            tests = _merge_values(tests, args.values_file, test_values, auto_values)
+            tests = _merge_values(tests, args.values_file, test_values, auto_values,
+                                  args.errors_file)
         print(list2str([comment] + tests), file=output)
     elif args.op == "C":
         assert args.format in LANG, f"valid output language {args.format}"
