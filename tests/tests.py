@@ -1268,9 +1268,12 @@ def test_sanity(directory):
         for suffix in SUFFIXES:
             fn = f"{name}.{suffix}"
             assert pathlib.Path(fn).exists(), f"expecting file: {fn}"
-    # some values
+    # some values, hand written or generated
     for fn in files["values.json"]:
-        with open(fn) as f:
-            values = json.load(f)
-        assert isinstance(values, list)
-        assert len(list(filter(lambda i: isinstance(i, list), values))) > 2, f"enough values: {fn}"
+        vectors = 0
+        for tvf in (fn, fn.replace(".values.json", ".auto.json")):
+            with open(tvf) as f:
+                values = json.load(f)
+            assert isinstance(values, list)
+            vectors += len(list(filter(lambda i: isinstance(i, list), values)))
+        assert vectors > 2, f"enough values: {fn}"
