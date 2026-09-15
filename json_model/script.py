@@ -1052,6 +1052,13 @@ def jmc_script(xargs: list[str]|None = None) -> int:
     if args.from_ir:
         args.op = args.op or "C"
 
+    if args.errors_file is not None:
+        if args.values_file is None:
+            log.error("--errors requires --values")
+            return 1
+        if not os.path.isfile(args.errors_file):
+            log.warning(f"{args.errors_file}: no such errors file")
+
     test_values, auto_values = None, None
     if args.values_file is not None:
         args.op = args.op or "A"
