@@ -77,8 +77,9 @@ _INT_MIRRORS = {"!=": lambda n: math.floor(n) - 1}
 _FLOAT_BOUNDS = {
     ">=": lambda n: float(n), "<=": lambda n: float(n), "=": lambda n: float(n),
 }
+_PI = 3.1415927
 _TYPE_VIOLATIONS = [None, True, 0, "", [], {}]
-_ROOT_TYPES = [None, True, False, -42, 3.1415927, "", "unexpected", [], [1, "expected"], {}, {"un": "expected"}]
+_ROOT_TYPES = [None, True, False, -42, _PI, "", "unexpected", [], [1, "expected"], {}, {"un": "expected"}]
 _EXTRA_NAMES = ["no-such-prop", "no-such-property", "no-such-property1"]
 _UINT_PREDEFS = {"$U32", "$U64"}
 _PREDEFS = {
@@ -139,7 +140,9 @@ def _simplest_scalar(model: ModelType) -> Jsonable:
         case int():
             return 1 if model == 1 else 0
         case float():
-            return 1.0 if model == 1.0 else 0.0
+            if model == 0.0:
+                return 0.0
+            return _PI if model == 1.0 else -_PI
         case _:
             raise UnsupportedValue(f"not a scalar model: {model}")
 
