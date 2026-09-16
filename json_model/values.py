@@ -2027,6 +2027,42 @@ _PASSED = "BAD PASS"
 _FAILED = "BAD FAIL"
 _NO_BASE = "no value the compiler accepts, every vector below builds on this one"
 
+_CHOICES = {"^", "&"}
+_BOUND = " bound"
+
+def _bounded(comment: str) -> bool:
+    """Whether a vector only sits on a constraint bound.
+
+    Such a value is built from the constraints alone and is known not to break
+    them, which is weaker than matching the model they constrain, so only an
+    oracle settles it.
+    """
+    head = comment[:-len(_AGREES)] if comment.endswith(_AGREES) else comment
+    return head.endswith(_BOUND)
+
+def _composed(model: ModelType, jm: JsonModel, seen: frozenset[str] = frozenset()) -> bool:
+    """Whether every value built for a model is valid by construction.
+
+    A xor or a conjunction makes the builder commit to one branch without showing
+    what the others do with the value, so what it returns there is a guess.
+    Anywhere else a value is composed of parts each taken from the model which
+    must accept them, and the composition is the proof.
+    """
+    if isinstance(model, str):
+        name = model[1:]
+        if model.startswith("$") and name in jm._defs._syms:
+            return (name in seen or
+                    _composed(jm._defs._syms[name]._model, jm, seen | {name}))
+        return True
+    elif isinstance(model, list):
+        return all(_composed(item, jm, seen) for item in model)
+    elif isinstance(model, dict):
+        return not set(model) & _CHOICES and all(
+            _composed(sub, jm, seen)
+            for prop, sub in model.items() if not prop.startswith("#"))
+    else:
+        return True
+
 def _recheck(entries: list[tuple[int, str, list]], model: ModelType,
              resolver: Resolver|None, url: str, extend: bool) -> None:
     """Settle every unproven mark against the oracles, null only for what none settles."""
@@ -2052,6 +2088,7 @@ def _recheck(entries: list[tuple[int, str, list]], model: ModelType,
         jm, compiled, defs = None, None, None
     results = [None if jm is None else _verify(entry[1][1], model, jm, defs)
                for entry in judged]
+    composed = compiled is not None and _composed(compiled, jm)
     def settled(index: int, entry: list) -> bool:
         """Whether the file may state the verdict of a vector as it stands."""
         if entry[0].endswith(_AGREES):
@@ -2072,6 +2109,8 @@ def _recheck(entries: list[tuple[int, str, list]], model: ModelType,
             continue
         if (marked or expect) and compiled is not None and _denies(jm, compiled, value):
             expect, marked = False, False
+        elif marked and expect and composed and not _bounded(entry[0]):
+            marked = False
         if result is not None and result != expect:
             remark(entry, _FAILED if expect else _PASSED)
             entry[1][0] = None
