@@ -2,8 +2,6 @@
 # Generate values from model
 #
 import copy
-import datetime
-import ipaddress
 import json
 import math
 import re
@@ -14,7 +12,9 @@ from .model import JsonModel
 from .resolver import Resolver
 from .objops import merge
 from . import analyze, optim
-from .predefs import MODEL_PREDEFS, PREDEFS
+from .predefs import MODEL_PREDEFS, PREDEFS, PREDEF_RE, STR_MODEL_PREDEFS
+from .python import PYTHON_RUNTIME_PREDEFS
+from .runtime import support
 from .runtime.types import EntryCheckFun
 
 _NUMBER_RE = re.compile(r"^=-?\d+(\.\d+)?([Ee][-+]?\d+)?$")
@@ -41,13 +41,6 @@ _NO_NAME_PREDEFS = {
     "$NULL", "$NONE", "$BOOL", "$BOOLEAN", "$INT", "$INTEGER", "$I32", "$I64",
     "$U32", "$U64", "$FLOAT", "$F32", "$F64", "$NUMBER",
 }
-_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
-_UUID_RE = re.compile(r"[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
-_ETH_RE = re.compile(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}")
-_SEMVER_RE = re.compile(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?")
-_CARD_RE = re.compile(r"\d{12,19}")
-_DURATION_RE = re.compile(r"P(?!$)(\d+Y)?(\d+M)?(\d+D)?(T(?!$)(\d+H)?(\d+M)?(\d+(\.\d+)?S)?)?")
-_JSONPT_RE = re.compile(r"(/([^/~]|~[01])*)*")
 _OPERATORS = {"@", "|", "&", "^", "!", "=", "!=", "<", "<=", ">", ">="}
 _QUOTED_OPS = _OPERATORS - {"@"}
 _ROOT_KEYS = {"$", "%", "~"}
@@ -687,52 +680,28 @@ def _inside(target: ModelType, value: Jsonable) -> bool:
     low = _numeric_low(target)
     return low is None or value >= low
 
-def _parses(parser, name: str) -> bool:
-    """Whether a reference parser accepts a name."""
-    try:
-        parser(name)
-        return True
-    except Exception:
-        return False
+def _checked(predef: str):
+    """Format check the project already writes for a predefined model, if any.
 
-def _iso_time(name: str, zoned: bool|None = None) -> bool:
-    """Whether a name is an ISO time, allowing the 23:59:60 leap second."""
-    probe = "23:59:59" + name[8:] if name.startswith("23:59:60") else name
-    try:
-        parsed = datetime.time.fromisoformat(probe)
-    except ValueError:
-        return False
-    return zoned is None or (parsed.tzinfo is not None) is zoned
+    The backend implementation when there is one, otherwise the approximate
+    regex the backends without one fall back to, so that nothing here is a
+    second opinion of its own.
+    """
+    if predef in PYTHON_RUNTIME_PREDEFS:
+        checker = getattr(support, PYTHON_RUNTIME_PREDEFS[predef])
+        return lambda name: checker(name, "", None)
+    elif predef in PREDEF_RE:
+        _, pattern, options = PREDEF_RE[predef]
+        flags = ((re.I if "i" in options else 0) | (re.S if "s" in options else 0))
+        matcher = re.compile(pattern, flags)
+        return lambda name: matcher.match(name) is not None
+    else:
+        return None
 
-def _luhn(name: str) -> bool:
-    """Whether a name is a card number passing the Luhn checksum."""
-    if _CARD_RE.fullmatch(name) is None:
-        return False
-    total, double = 0, False
-    for char in reversed(name):
-        digit = int(char)
-        total += digit * 2 - 9 if double and digit > 4 else digit * 2 if double else digit
-        double = not double
-    return total % 10 == 0
-
-_PREDEF_NAMES = {
-    "$DATE": lambda n: _DATE_RE.fullmatch(n) is not None
-                       and _parses(datetime.date.fromisoformat, n),
-    "$TIME": _iso_time,
-    "$TIMETZ": lambda n: _iso_time(n, True),
-    "$DATETIME": lambda n: _parses(datetime.datetime.fromisoformat, n),
-    "$UUID": lambda n: _UUID_RE.fullmatch(n) is not None,
-    "$IP4": lambda n: _parses(ipaddress.IPv4Address, n),
-    "$IP6": lambda n: "%" not in n and _parses(ipaddress.IPv6Address, n),
-    "$JSON": lambda n: _parses(json.loads, n),
-    "$ETH": lambda n: _ETH_RE.fullmatch(n) is not None,
-    "$SEMVER": lambda n: _SEMVER_RE.fullmatch(n) is not None,
-    "$CARD": _luhn,
-    "$DURATION": lambda n: _DURATION_RE.fullmatch(n) is not None,
-    "$JSONPT": lambda n: _JSONPT_RE.fullmatch(n) is not None,
-    "$REGEX": lambda n: _parses(re.compile, n),
-    "$EXREG": lambda n: _parses(re.compile, re.sub(r"\(\$\w+", "(P<x>", n)),
-}
+_PREDEF_NAMES = {name: check for name, check in
+                 ((predef, _checked(predef)) for predef in STR_MODEL_PREDEFS
+                  if not predef.startswith("$__"))
+                 if check is not None}
 
 def _referred(prop: str, jm: JsonModel) -> tuple[ModelType, JsonModel]:
     """Model a property key reference stands for, stopping at a predefined name."""
