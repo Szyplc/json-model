@@ -678,6 +678,15 @@ def _holds(op: str, bound: Jsonable, value: Jsonable) -> bool:
     else:
         return False
 
+def _inside(target: ModelType, value: Jsonable) -> bool:
+    """Whether a number certainly belongs to a numeric model.
+
+    Only the sign an unsigned predef or a scalar sample implies is known, which
+    is what the compiler enforces too, so nothing beyond it is claimed.
+    """
+    low = _numeric_low(target)
+    return low is None or value >= low
+
 def _parses(parser, name: str) -> bool:
     """Whether a reference parser accepts a name."""
     try:
@@ -1915,7 +1924,9 @@ def bounds(model: ModelType, jm: JsonModel|None = None,
                 continue
             values[key] = value
             if not (grounded and not guarded[0] and _guesses() == here
-                    and not isinstance(sub, (int, float))
+                    and (not isinstance(sub, (int, float))
+                         or (not _mistyped(sub, _ultimate(jm, props["@"]))
+                             and _inside(props["@"], sub)))
                     and all(_holds(p, props[p], sub) for p in ops)
                     and _kept(guarded[1], value)):
                 marks.add(key)
