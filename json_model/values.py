@@ -658,6 +658,26 @@ def _breaks(op: str, bound: Jsonable, value: Jsonable) -> bool:
     else:
         return False
 
+def _holds(op: str, bound: Jsonable, value: Jsonable) -> bool:
+    """Whether a value certainly satisfies one constraint.
+
+    The mirror of _breaks: a constraint has three answers and one predicate can
+    only tell two apart, so proving a value needs the side which says nothing
+    when it cannot measure.
+    """
+    if op in _COMPARISONS:
+        if isinstance(bound, str):
+            return isinstance(value, str) and not _BREAKING[op](value, bound)
+        measure = _measured(value)
+        if measure is None or isinstance(bound, bool) or not isinstance(bound, (int, float)):
+            return False
+        return not _BREAKING[op](measure, bound)
+    elif op == "!" and bound is True and isinstance(value, list):
+        dumped = [json.dumps(item, sort_keys=True) for item in value]
+        return len(set(dumped)) == len(dumped)
+    else:
+        return False
+
 def _parses(parser, name: str) -> bool:
     """Whether a reference parser accepts a name."""
     try:
@@ -1016,6 +1036,17 @@ def _discriminating(models: ModelArray, jm: JsonModel, seen: frozenset[str]) -> 
                 return [value]
     return []
 
+_GUESSES = [0]
+
+def _guesses() -> int:
+    """How many values the builder has returned without a proof, since it started.
+
+    A caller which reads it before and after a build learns whether that build
+    committed to a branch no oracle confirmed, and so whether the value it holds
+    is composed of parts the model must accept or is only a guess.
+    """
+    return _GUESSES[0]
+
 def _simplest_operator(op: str, alts: ModelArray, jm: JsonModel,
                        seen: frozenset[str]) -> Jsonable:
     """Simplest value satisfying an operator, checked against the whole model."""
@@ -1035,9 +1066,11 @@ def _simplest_operator(op: str, alts: ModelArray, jm: JsonModel,
             refused = [value]
     if op == "^":
         for found in _discriminating(models, jm, seen):
+            _GUESSES[0] += 1
             return found
     for fallback in (unchecked, refused):
         if fallback is not None:
+            _GUESSES[0] += 1
             return fallback[0]
     raise UnsupportedValue(f"no alternative satisfies {op}: {alts}")
 
@@ -1319,21 +1352,21 @@ def _closed(node: ModelObject, jm: JsonModel) -> bool:
 
 def _object_sites(sites: list):
     """Sites which target a plain object model."""
-    for mpath, vpath, frames, props, disjunction in sites:
+    for mpath, vpath, frames, props, disjunction, guarded in sites:
         node = props["@"]
         if (not set(props) - {"@"} and isinstance(node, dict)
                 and not set(node) & (_OPERATORS | _ROOT_KEYS)):
-            yield mpath, vpath, frames, node, disjunction
+            yield mpath, vpath, frames, node, disjunction, guarded
 
 def _alternatives(sites: list):
     """Sites which target a union model."""
-    for mpath, vpath, frames, props, disjunction in sites:
+    for mpath, vpath, frames, props, disjunction, guarded in sites:
         node = props["@"]
         if set(props) - {"@"} or not isinstance(node, dict):
             continue
         keys = {p for p in node if not p.startswith("#")}
         if keys in ({"|"}, {"^"}):
-            yield mpath, vpath, frames, node, next(iter(keys))
+            yield mpath, vpath, frames, node, next(iter(keys)), disjunction, guarded
 
 def _overlapping(alts: ModelArray, jm: JsonModel,
                  seen: frozenset[str]) -> list[Jsonable]:
@@ -1360,12 +1393,12 @@ def _overlapping(alts: ModelArray, jm: JsonModel,
 
 def _exclusive_sites(sites: list):
     """Sites which target an exclusive union model."""
-    for mpath, vpath, frames, props, disjunction in sites:
+    for mpath, vpath, frames, props, disjunction, guarded in sites:
         node = props["@"]
         if set(props) - {"@"} or not isinstance(node, dict):
             continue
         if {p for p in node if not p.startswith("#")} == {"^"}:
-            yield mpath, vpath, frames, node, disjunction
+            yield mpath, vpath, frames, node, disjunction, guarded
 
 def _jqpath(path: list) -> str:
     """jq path expression for a path of object keys and array indexes."""
@@ -1417,55 +1450,65 @@ def _replaced(doc: Jsonable, path: list, value: Jsonable) -> Jsonable:
 
 def _sites(model: ModelType, mpath: list, vpath: list, frames: list,
            jm: JsonModel, seen: frozenset[str], notes: list[str]|None = None,
-           disjunction: tuple[list, ModelObject]|None = None):
+           disjunction: tuple[list, ModelObject]|None = None,
+           guarded: tuple = (False, ())):
     """Violation sites, as model path, value path, branch frames, properties and disjunction.
 
     A site under an alternative of a union or a xor carries the outermost one, as the
     value path where it applies and its node: breaking the model there only invalidates
     the document when every alternative of that operator rejects the value.
+
+    A site carries what stands above it as a guard: whether a xor or a conjunction
+    chose there, which nothing built below can show again, and the constraints met on
+    the way down, with the value path each applies to, which a whole document can be
+    measured against.
     """
     if isinstance(model, str):
         name = model[1:]
         if model.startswith("$") and name in jm._defs._syms and name not in seen:
             yield from _sites(jm._defs._syms[name]._model, ["$", name], vpath,
-                              frames, jm, seen | {name}, notes, disjunction)
+                              frames, jm, seen | {name}, notes, disjunction, guarded)
         elif model != "$ANY" and (not model.startswith("$") or name in PREDEFS):
-            yield mpath, vpath, frames, {"@": model}, disjunction
+            yield mpath, vpath, frames, {"@": model}, disjunction, guarded
         elif model == "$ANY" and notes is not None:
             notes.append(f"{_mpath(mpath)} invalid: $ANY accepts every value")
     elif isinstance(model, list):
-        yield mpath, vpath, frames, {"@": model}, disjunction
+        yield mpath, vpath, frames, {"@": model}, disjunction, guarded
         items = [(i, m) for i, m in enumerate(model)
                  if not (isinstance(m, str) and m.startswith("#"))]
         if len(items) > 1:
             for n, (i, item) in enumerate(items):
                 yield from _sites(item, mpath + [i], vpath + [n], frames, jm, seen,
-                                  notes, disjunction)
+                                  notes, disjunction, guarded)
         elif items:
             i, item = items[0]
             yield from _sites(item, mpath + [i], vpath + [0],
                               frames + [(vpath, {"@": model, ">=": 1})], jm, seen,
-                              notes, disjunction)
+                              notes, disjunction, guarded)
     elif isinstance(model, dict):
         props = {p: m for p, m in model.items() if not p.startswith("#")}
         others = set(props) - {"@"}
         if "@" in props and others <= _CONSTRAINTS:
             if others:
-                yield mpath, vpath, frames, props, disjunction
+                yield mpath, vpath, frames, props, disjunction, guarded
             yield from _sites(props["@"], mpath + ["@"], vpath, frames, jm, seen,
-                              notes, disjunction)
+                              notes, disjunction,
+                              (guarded[0],
+                               guarded[1] + ((vpath, {p: props[p] for p in others}),))
+                              if others else guarded)
         elif set(props) in ({"|"}, {"^"}, {"&"}):
             op = next(iter(props))
-            yield mpath, vpath, frames, {"@": model}, disjunction
+            yield mpath, vpath, frames, {"@": model}, disjunction, guarded
             inner = (disjunction if disjunction is not None or op == "&"
                      else (vpath, props))
             for index, alt in enumerate(props[op]):
                 if isinstance(alt, str) and alt.startswith("#"):
                     continue
                 yield from _sites(alt, mpath + [op, index], vpath,
-                                  frames + [(vpath, alt)], jm, seen, notes, inner)
+                                  frames + [(vpath, alt)], jm, seen, notes, inner,
+                                  (guarded[0] or op != "|", guarded[1]))
         elif not set(props) & (_OPERATORS | _ROOT_KEYS):
-            yield mpath, vpath, frames, {"@": model}, disjunction
+            yield mpath, vpath, frames, {"@": model}, disjunction, guarded
             named = {p[1:] if p.startswith(("!", "?", "_")) else p
                      for p in props if p and not p.startswith(("/", "$"))}
             for prop, sub in props.items():
@@ -1484,9 +1527,9 @@ def _sites(model: ModelType, mpath: list, vpath: list, frames: list,
                     inner = (frames + [(vpath + [name], sub)] if prop.startswith("?")
                              else frames)
                 yield from _sites(sub, mpath + [prop], vpath + [name], inner, jm, seen,
-                                  notes, disjunction)
+                                  notes, disjunction, guarded)
     else:
-        yield mpath, vpath, frames, {"@": model}, disjunction
+        yield mpath, vpath, frames, {"@": model}, disjunction, guarded
 
 def _document(sub: Jsonable, vpath: list, frames: list, doc: Jsonable,
               jm: JsonModel, seen: frozenset[str]) -> Jsonable:
@@ -1514,6 +1557,10 @@ def _at(doc: Jsonable, path: list) -> Jsonable:
         else:
             return None
     return node
+
+def _kept(guards: tuple, value: Jsonable) -> bool:
+    """Whether a document certainly satisfies every constraint standing above a site."""
+    return all(_holds(p, c, _at(value, vp)) for vp, ops in guards for p, c in ops.items())
 
 def _validated(sub: Jsonable, vpath: list, frames: list, doc: Jsonable,
                jm: JsonModel, seen: frozenset[str],
@@ -1620,12 +1667,12 @@ def _violations(model: ModelType, jm: JsonModel|None = None,
         marks.add(key)
         return False
 
-    if any(f[0][0] if f else v for _, v, f, _, _ in sites):
+    if any(f[0][0] if f else v for _, v, f, _, _, _ in sites):
         try:
             doc = simplest(model, jm, seen)
         except UnsupportedValue as e:
             failure("violation values", f"no document to alter: {e}")
-    for mpath, vpath, frames, props, disjunction in sites:
+    for mpath, vpath, frames, props, disjunction, guarded in sites:
         ops = set(props) - {"@"}
         if not ops or all(_mpath(mpath + [op]) in values for op in ops):
             continue
@@ -1657,7 +1704,7 @@ def _violations(model: ModelType, jm: JsonModel|None = None,
             elif proven:
                 taken.add(dumped)
             values[key] = value
-    for mpath, vpath, frames, props, disjunction in sites:
+    for mpath, vpath, frames, props, disjunction, guarded in sites:
         key = f"{_mpath(mpath)} invalid"
         if not mpath or set(props) - {"@"} or key in values:
             continue
@@ -1684,7 +1731,7 @@ def _violations(model: ModelType, jm: JsonModel|None = None,
                 break
         else:
             skip(f"{key}: no type breaks the model here")
-    for mpath, vpath, frames, props, disjunction in sites:
+    for mpath, vpath, frames, props, disjunction, guarded in sites:
         key = f"{_mpath(mpath)} bad"
         if set(props) - {"@"} or key in values:
             continue
@@ -1709,7 +1756,7 @@ def _violations(model: ModelType, jm: JsonModel|None = None,
         elif proven:
             taken.add(json.dumps(value, sort_keys=True))
         values[key] = value
-    for mpath, vpath, frames, node, disjunction in _object_sites(sites):
+    for mpath, vpath, frames, node, disjunction, guarded in _object_sites(sites):
         try:
             built = simplest(node, jm, seen)
         except UnsupportedValue as e:
@@ -1740,7 +1787,7 @@ def _violations(model: ModelType, jm: JsonModel|None = None,
             elif proven:
                 taken.add(json.dumps(value, sort_keys=True))
             values[key] = value
-    for mpath, vpath, frames, node, disjunction in _object_sites(sites):
+    for mpath, vpath, frames, node, disjunction, guarded in _object_sites(sites):
         if not _closed(node, jm):
             skip(f"{_mpath(mpath)} extra: object is open")
             continue
@@ -1777,7 +1824,7 @@ def _violations(model: ModelType, jm: JsonModel|None = None,
                 break
         else:
             skip(f"{_mpath(mpath)} extra: every extra property is valid")
-    for mpath, vpath, frames, node, disjunction in _exclusive_sites(sites):
+    for mpath, vpath, frames, node, disjunction, guarded in _exclusive_sites(sites):
         key = f"{_mpath(mpath + ['^'])} overlap"
         if key in values:
             continue
@@ -1840,12 +1887,14 @@ def bounds(model: ModelType, jm: JsonModel|None = None,
     values: dict[str, Jsonable] = {}
     reasons: list[str] = []
     doc = None
-    if any(f[0][0] if f else v for _, v, f, _, _ in sites):
+    base = _guesses()
+    if any(f[0][0] if f else v for _, v, f, _, _, _ in sites):
         try:
             doc = simplest(model, jm, seen)
         except UnsupportedValue as e:
             reasons.append(f"no document to alter: {e}")
-    for mpath, vpath, frames, props, disjunction in sites:
+    grounded = _guesses() == base
+    for mpath, vpath, frames, props, disjunction, guarded in sites:
         ops = set(props) - {"@"}
         if not ops or all(_mpath(mpath + [op]) in values for op in ops):
             continue
@@ -1858,13 +1907,18 @@ def bounds(model: ModelType, jm: JsonModel|None = None,
             key = _mpath(mpath + [op])
             if key in values:
                 continue
+            here = _guesses()
             try:
                 value = _document(sub, vpath, frames, doc, jm, seen)
             except UnsupportedValue as e:
                 reasons.append(f"{key}: {e}")
                 continue
             values[key] = value
-            marks.add(key)
+            if not (grounded and not guarded[0] and _guesses() == here
+                    and not isinstance(sub, (int, float))
+                    and all(_holds(p, props[p], sub) for p in ops)
+                    and _kept(guarded[1], value)):
+                marks.add(key)
     if not values:
         if not reasons:
             raise Vacuous("no constraint bound: no constraint in model")
@@ -1886,14 +1940,17 @@ def optionals(model: ModelType, jm: JsonModel|None = None,
     reasons: list[str] = []
     doubled: list[str] = []
     doc = None
+    base = _guesses()
     try:
         doc = simplest(model, jm, seen)
     except Vacuous:
         raise
     except UnsupportedValue as e:
         reasons.append(f"optional values: no document to alter: {e}")
+    grounded = _guesses() == base
     taken = set() if doc is None else {json.dumps(doc, sort_keys=True)}
-    for mpath, vpath, frames, node, disjunction in _object_sites(sites):
+    for mpath, vpath, frames, node, disjunction, guarded in _object_sites(sites):
+        start = _guesses()
         props = _optional_props(node, jm, seen)
         if not props:
             continue
@@ -1904,10 +1961,12 @@ def optionals(model: ModelType, jm: JsonModel|None = None,
             continue
         if not isinstance(built, dict):
             continue
+        settled = grounded and not guarded[0] and _guesses() == start
         for prop, name, submodel in props:
             key = f"{_mpath(mpath + [prop])} present"
             if key in values or name in built:
                 continue
+            here = _guesses()
             try:
                 sub = {**built, name: simplest(submodel, jm, seen)}
                 found = _validated(sub, vpath, frames, doc, jm, seen, taken, key, marks)
@@ -1926,6 +1985,8 @@ def optionals(model: ModelType, jm: JsonModel|None = None,
                 continue
             values[key] = value
             taken.add(dumped)
+            if settled and _guesses() == here and _kept(guarded[1], value):
+                marks.discard(key)
     if not values and not reasons and not doubled:
         raise Vacuous(f"no optional property in model: {_brief(model)}")
     return values, reasons, doubled
@@ -1944,20 +2005,24 @@ def branches(model: ModelType, jm: JsonModel|None = None,
     reasons: list[str] = []
     doubled: list[str] = []
     doc = None
+    base = _guesses()
     try:
         doc = simplest(model, jm, seen)
     except Vacuous:
         raise
     except UnsupportedValue as e:
         reasons.append(f"branch values: no document to alter: {e}")
+    grounded = _guesses() == base
     taken = set() if doc is None else {json.dumps(doc, sort_keys=True)}
-    for mpath, vpath, frames, node, op in _alternatives(sites):
+    for mpath, vpath, frames, node, op, disjunction, guarded in _alternatives(sites):
+        settled = grounded and op == "|" and not guarded[0]
         for index, alt in enumerate(node[op]):
             if isinstance(alt, str) and alt.startswith("#"):
                 continue
             key = f"{_mpath(mpath + [op, index])} branch"
             if key in values:
                 continue
+            here = _guesses()
             try:
                 sub = simplest(alt, jm, seen)
                 found = _validated(sub, vpath, frames, doc, jm, seen, taken, key, marks)
@@ -1976,6 +2041,8 @@ def branches(model: ModelType, jm: JsonModel|None = None,
                 continue
             values[key] = value
             taken.add(dumped)
+            if settled and _guesses() == here and _kept(guarded[1], value):
+                marks.discard(key)
     if not values and not reasons and not doubled:
         raise Vacuous(f"no union alternative in model: {_brief(model)}")
     return values, reasons, doubled
@@ -2027,42 +2094,6 @@ _PASSED = "BAD PASS"
 _FAILED = "BAD FAIL"
 _NO_BASE = "no value the compiler accepts, every vector below builds on this one"
 
-_CHOICES = {"^", "&"}
-_BOUND = " bound"
-
-def _bounded(comment: str) -> bool:
-    """Whether a vector only sits on a constraint bound.
-
-    Such a value is built from the constraints alone and is known not to break
-    them, which is weaker than matching the model they constrain, so only an
-    oracle settles it.
-    """
-    head = comment[:-len(_AGREES)] if comment.endswith(_AGREES) else comment
-    return head.endswith(_BOUND)
-
-def _composed(model: ModelType, jm: JsonModel, seen: frozenset[str] = frozenset()) -> bool:
-    """Whether every value built for a model is valid by construction.
-
-    A xor or a conjunction makes the builder commit to one branch without showing
-    what the others do with the value, so what it returns there is a guess.
-    Anywhere else a value is composed of parts each taken from the model which
-    must accept them, and the composition is the proof.
-    """
-    if isinstance(model, str):
-        name = model[1:]
-        if model.startswith("$") and name in jm._defs._syms:
-            return (name in seen or
-                    _composed(jm._defs._syms[name]._model, jm, seen | {name}))
-        return True
-    elif isinstance(model, list):
-        return all(_composed(item, jm, seen) for item in model)
-    elif isinstance(model, dict):
-        return not set(model) & _CHOICES and all(
-            _composed(sub, jm, seen)
-            for prop, sub in model.items() if not prop.startswith("#"))
-    else:
-        return True
-
 def _recheck(entries: list[tuple[int, str, list]], model: ModelType,
              resolver: Resolver|None, url: str, extend: bool) -> None:
     """Settle every unproven mark against the oracles, null only for what none settles."""
@@ -2088,7 +2119,6 @@ def _recheck(entries: list[tuple[int, str, list]], model: ModelType,
         jm, compiled, defs = None, None, None
     results = [None if jm is None else _verify(entry[1][1], model, jm, defs)
                for entry in judged]
-    composed = compiled is not None and _composed(compiled, jm)
     def settled(index: int, entry: list) -> bool:
         """Whether the file may state the verdict of a vector as it stands."""
         if entry[0].endswith(_AGREES):
@@ -2109,8 +2139,6 @@ def _recheck(entries: list[tuple[int, str, list]], model: ModelType,
             continue
         if (marked or expect) and compiled is not None and _denies(jm, compiled, value):
             expect, marked = False, False
-        elif marked and expect and composed and not _bounded(entry[0]):
-            marked = False
         if result is not None and result != expect:
             remark(entry, _FAILED if expect else _PASSED)
             entry[1][0] = None
