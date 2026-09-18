@@ -456,7 +456,16 @@ BACKENDS     = py js pl c java
 .SECONDARY: $(F.auto)
 
 %.auto.json: %.model.json
-	$(JMC.cmd) --auto-values --values $*.values.json -o $@ $<
+	skip=
+	if [ -f $*.errors.json ] ; then
+	  auto=$$(jq .auto $*.errors.json)
+	  [ "$$auto" = "false" ] && skip=1
+	fi
+	if [ "$$skip" ] ; then
+	  echo '[ "# skipped" ]' > $@
+	else
+	  $(JMC.cmd) --auto-values --values $*.values.json -o $@ $<
+	fi
 
 # per backend output on the generated test vectors, as for the values file
 
