@@ -1444,7 +1444,7 @@ def _sites(model: ModelType, mpath: list, vpath: list, frames: list,
     if isinstance(model, str):
         name = model[1:]
         if model.startswith("$") and name in jm._defs._syms and name not in seen:
-            yield from _sites(jm._defs._syms[name]._model, ["$", name], vpath,
+            yield from _sites(jm._defs._syms[name]._model, mpath + ["$", name], vpath,
                               frames, jm, seen | {name}, notes, disjunction, guarded)
         elif model != "$ANY" and (not model.startswith("$") or name in PREDEFS):
             yield mpath, vpath, frames, {"@": model}, disjunction, guarded
