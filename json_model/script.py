@@ -465,9 +465,12 @@ def _generation_off(values_file: str|None, output: str|None, model: str|None,
         try:
             with open(epath) as f:
                 errors = json.load(f)
-        except (OSError, ValueError):
+        except (OSError, ValueError) as e:
+            log.error(f"{epath}: unreadable errors file, {e}")
             continue
-        if isinstance(errors, dict) and errors.get("auto") is False:
+        if not isinstance(errors, dict):
+            log.error(f"{epath}: unexpected errors file, not an object")
+        elif errors.get("auto") is False:
             return epath
     return None
 
