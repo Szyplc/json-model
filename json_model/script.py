@@ -425,6 +425,8 @@ def _write_values(path: str, dropped: set[int], added: list) -> None:
 
 _VALUES_SUFFIX = ".values.json"
 _ERRORS_SUFFIX = ".errors.json"
+_AUTO_SUFFIX = ".auto.json"
+_MODEL_SUFFIXES = (".model.json", ".model.yaml", ".model.js")
 _ERRORS_SOURCES = ("values", "auto")
 
 def _errors_path(path: str|None, errors_file: str|None = None) -> str|None:
@@ -435,17 +437,39 @@ def _errors_path(path: str|None, errors_file: str|None = None) -> str|None:
         return None
     return path[:-len(_VALUES_SUFFIX)] + _ERRORS_SUFFIX
 
-def _generation_off(path: str|None, errors_file: str|None = None) -> str|None:
+def _errors_files(values_file: str|None, output: str|None, model: str|None,
+                  errors_file: str|None = None) -> list[str]:
+    """Expected errors files of a test vector generation, most explicit first."""
+    if errors_file is not None:
+        return [errors_file]
+    roots: list[str] = []
+    if values_file is not None and values_file.endswith(_VALUES_SUFFIX):
+        roots.append(values_file[:-len(_VALUES_SUFFIX)])
+    if output is not None and output.endswith(_AUTO_SUFFIX):
+        roots.append(output[:-len(_AUTO_SUFFIX)])
+    if model is not None and model != "-" and "://" not in model:
+        stripped = [model[:-len(s)] for s in _MODEL_SUFFIXES if model.endswith(s)]
+        roots.append(stripped[0] if stripped else model)
+    paths: list[str] = []
+    for root in roots:
+        if root + _ERRORS_SUFFIX not in paths:
+            paths.append(root + _ERRORS_SUFFIX)
+    return paths
+
+def _generation_off(values_file: str|None, output: str|None, model: str|None,
+                    errors_file: str|None = None) -> str|None:
     """Errors file switching the test vector generation off with a false auto member, if any."""
-    epath = _errors_path(path, errors_file)
-    if epath is None or not os.path.isfile(epath):
-        return None
-    try:
-        with open(epath) as f:
-            errors = json.load(f)
-    except (OSError, ValueError):
-        return None
-    return epath if isinstance(errors, dict) and errors.get("auto") is False else None
+    for epath in _errors_files(values_file, output, model, errors_file):
+        if not os.path.isfile(epath):
+            continue
+        try:
+            with open(epath) as f:
+                errors = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if isinstance(errors, dict) and errors.get("auto") is False:
+            return epath
+    return None
 
 def _values_shift(values: list, removed: set[int]) -> dict[int, int]:
     """New position of each test vector a values file keeps."""
@@ -1353,7 +1377,7 @@ def jmc_script(xargs: list[str]|None = None) -> int:
         show = model.toModel(True)
         print(json2str(show), file=output)
     elif args.op == "A":  # generated test vectors
-        disabled = _generation_off(args.values_file, args.errors_file)
+        disabled = _generation_off(args.values_file, args.output, args.model, args.errors_file)
         if disabled is not None:
             log.warning(f"{args.model}: test vector generation disabled by {disabled}")
             print(list2str([f"# generated from {args.model}: generation disabled by {disabled}"]),
