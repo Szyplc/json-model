@@ -427,6 +427,26 @@ _VALUES_SUFFIX = ".values.json"
 _ERRORS_SUFFIX = ".errors.json"
 _ERRORS_SOURCES = ("values", "auto")
 
+def _errors_path(path: str|None, errors_file: str|None = None) -> str|None:
+    """Path of the expected errors file of a values file, if any."""
+    if errors_file is not None:
+        return errors_file
+    if path is None or not path.endswith(_VALUES_SUFFIX):
+        return None
+    return path[:-len(_VALUES_SUFFIX)] + _ERRORS_SUFFIX
+
+def _generation_off(path: str|None, errors_file: str|None = None) -> str|None:
+    """Errors file switching the test vector generation off with a false auto member, if any."""
+    epath = _errors_path(path, errors_file)
+    if epath is None or not os.path.isfile(epath):
+        return None
+    try:
+        with open(epath) as f:
+            errors = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return epath if isinstance(errors, dict) and errors.get("auto") is False else None
+
 def _values_shift(values: list, removed: set[int]) -> dict[int, int]:
     """New position of each test vector a values file keeps."""
     shift, ordinal, new = {}, 0, 0
@@ -608,13 +628,8 @@ def _errors_cleanup_empty(text: str) -> tuple[str, int]:
 def _renumber_errors(path: str, vshift: dict[int, int], ashift: dict[int, int]|None,
                      moved: dict[int, int], errors_file: str|None = None) -> None:
     """Move the test vector indexes of the errors file beside a values file."""
-    if errors_file is not None:
-        epath = errors_file
-    else:
-        if not path.endswith(_VALUES_SUFFIX):
-            return
-        epath = path[:-len(_VALUES_SUFFIX)] + _ERRORS_SUFFIX
-    if not os.path.isfile(epath):
+    epath = _errors_path(path, errors_file)
+    if epath is None or not os.path.isfile(epath):
         return
     try:
         with open(epath, newline="") as f:
@@ -1338,17 +1353,23 @@ def jmc_script(xargs: list[str]|None = None) -> int:
         show = model.toModel(True)
         print(json2str(show), file=output)
     elif args.op == "A":  # generated test vectors
-        try:
-            tests = vectors(model._init_md, resolver=model._resolver, url=model._url,
-                            extend=args.extend)
-            comment = f"# generated from {args.model}"
-        except UnsupportedValue as e:
-            log.warning(f"{args.model}: {e}")
-            tests, comment = [], f"# generated from {args.model}: {e}"
-        if test_values is not None:
-            tests = _merge_values(tests, args.values_file, test_values, auto_values,
-                                  args.errors_file)
-        print(list2str([comment] + tests), file=output)
+        disabled = _generation_off(args.values_file, args.errors_file)
+        if disabled is not None:
+            log.warning(f"{args.model}: test vector generation disabled by {disabled}")
+            print(list2str([f"# generated from {args.model}: generation disabled by {disabled}"]),
+                  file=output)
+        else:
+            try:
+                tests = vectors(model._init_md, resolver=model._resolver, url=model._url,
+                                extend=args.extend)
+                comment = f"# generated from {args.model}"
+            except UnsupportedValue as e:
+                log.warning(f"{args.model}: {e}")
+                tests, comment = [], f"# generated from {args.model}: {e}"
+            if test_values is not None:
+                tests = _merge_values(tests, args.values_file, test_values, auto_values,
+                                      args.errors_file)
+            print(list2str([comment] + tests), file=output)
     elif args.op == "C":
         assert args.format in LANG, f"valid output language {args.format}"
 
