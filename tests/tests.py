@@ -594,7 +594,7 @@ def expected_flag(directory: pathlib.Path, model: str, name: str, default=False)
 def expected_errors(directory: pathlib.Path, model: str,
                     source: str = "values") -> dict[str, list[int]]:
     """Expected errors for a model on one test vector source"""
-    section = errors_file(directory, model).get(source, {})
+    section = errors_file(directory, model).get(source) or {}
     return { k: v for k, v in section.items() if not k.startswith("#") }
 
 def check_errors(directory: pathlib.Path, model: str, key: str, observed: set[int],
