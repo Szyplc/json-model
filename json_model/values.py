@@ -2165,6 +2165,7 @@ _REPEATED = "DUPLICATE BAD"
 _PASSED = "BAD PASS"
 _FAILED = "BAD FAIL"
 _NO_BASE = "no value the compiler accepts, every vector below builds on this one"
+_REFUSED = "FAILED: the model refuses"
 
 def _recheck(entries: list[tuple[int, str, list]], model: ModelType,
              resolver: Resolver|None, url: str, extend: bool) -> None:
@@ -2211,6 +2212,9 @@ def _recheck(entries: list[tuple[int, str, list]], model: ModelType,
             continue
         if (marked or expect) and compiled is not None and _denies(jm, compiled, value):
             expect, marked = False, False
+            if entry[0].startswith(_SIMPLEST):
+                commented(entry, f"{_REFUSED} {json.dumps(value)}")
+                continue
         if result is not None and result != expect:
             remark(entry, _FAILED if expect else _PASSED)
             entry[1][0] = None
