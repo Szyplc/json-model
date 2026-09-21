@@ -27,6 +27,7 @@ _CATEGORIES = {
     _parser.CATEGORY_SPACE: " ",
 }
 _ANY_CHAR = "a"
+_ITEM_VARIANTS = 2
 _NAME_CHARS = "abcdefghijklmnopqrstuvwxyz"
 _ANY_NAME_PREDEFS = {"$ANY", "$STRING"}
 _TYPE_PREDEFS = {
@@ -359,6 +360,28 @@ def _sized(target: ModelType, base: Jsonable, length: int, unique: bool,
         else:
             raise UnsupportedValue(f"unique constraint needs {length} distinct values: {target}")
     return values
+
+def _filled(model: ModelType, jm: JsonModel, seen: frozenset[str]) -> Jsonable:
+    """Item value for an array, not an empty one when the model yields another."""
+    for value in _variants(model, jm, seen, _ITEM_VARIANTS):
+        if value or not isinstance(value, (str, list, dict)):
+            return value
+    return simplest(model, jm, seen)
+
+def _holding(target: ModelArray, item: ModelType, ops: ModelObject,
+             jm: JsonModel, seen: frozenset[str]) -> Jsonable|None:
+    """Shortest non-empty array a model accepts, None when its constraints forbid one."""
+    lo, hi = _bounds(ops, 1, 1)
+    if hi is not None and hi < 1:
+        return None
+    try:
+        length = int(_pick(lo, hi, ops, 1, 1))
+    except UnsupportedValue:
+        return None
+    if ops.get("!") is True:
+        return _sized(target, [], length, True, jm, seen)
+    else:
+        return [_filled(item, jm, seen) for _ in range(length)]
 
 def _typed(jm: JsonModel, model: ModelType, seen: frozenset[str],
            approx: dict[str, set[type]|None], found: dict[str, set[type]|None]) -> set[type]|None:
@@ -1336,6 +1359,16 @@ def _object_sites(sites: list):
                 and not set(node) & (_OPERATORS | _ROOT_KEYS)):
             yield mpath, vpath, frames, node, disjunction, guarded
 
+def _array_sites(sites: list):
+    """Sites which target an array model of one item model, with that model."""
+    for mpath, vpath, frames, props, disjunction, guarded in sites:
+        node = props["@"]
+        if set(props) - {"@"} or not isinstance(node, list):
+            continue
+        models = [m for m in node if not (isinstance(m, str) and m.startswith("#"))]
+        if len(models) == 1:
+            yield mpath, vpath, frames, node, models[0], disjunction, guarded
+
 def _alternatives(sites: list):
     """Sites which target a union model."""
     for mpath, vpath, frames, props, disjunction, guarded in sites:
@@ -2027,7 +2060,66 @@ def branches(model: ModelType, jm: JsonModel|None = None,
         raise Vacuous(f"no union alternative in model: {_brief(model)}")
     return values, reasons, doubled
 
-_EXPLANATIONS = (" root invalid", " root", " bound", " present", " branch",
+def _guarding(guarded: tuple, vpath: list) -> ModelObject:
+    """Numeric constraints standing above a site which apply to its own value."""
+    return {p: c for vp, ops in guarded[1] if vp == vpath for p, c in ops.items()
+            if p == "!" or (not isinstance(c, bool) and isinstance(c, (int, float)))}
+
+def items(model: ModelType, jm: JsonModel|None = None,
+          seen: frozenset[str] = frozenset(), resolver: Resolver|None = None,
+          url: str = "", extend: bool = False,
+          marks: set[str]|None = None
+          ) -> tuple[dict[str, Jsonable], list[str], list[str]]:
+    """Generate a valid value per array model, holding an item, why the others were skipped."""
+    marks = set() if marks is None else marks
+    if jm is None:
+        jm, model = _compile(model, True, resolver, url, extend)
+    sites = list(_sites(model, [], [], [], jm, frozenset()))
+    values: dict[str, Jsonable] = {}
+    reasons: list[str] = []
+    doubled: list[str] = []
+    doc = None
+    base = _guesses()
+    try:
+        doc = simplest(model, jm, seen)
+    except Vacuous:
+        raise
+    except UnsupportedValue as e:
+        reasons.append(f"item values: no document to alter: {e}")
+    grounded = _guesses() == base
+    taken = set() if doc is None else {json.dumps(doc, sort_keys=True)}
+    for mpath, vpath, frames, node, item, disjunction, guarded in _array_sites(sites):
+        key = f"{_mpath(mpath)} item"
+        if key in values:
+            continue
+        here = _guesses()
+        try:
+            sub = _holding(node, item, _guarding(guarded, vpath), jm, seen)
+            if sub is None:
+                continue
+            found = _validated(sub, vpath, frames, doc, jm, seen, taken, key, marks)
+        except Vacuous:
+            continue
+        except UnsupportedValue as e:
+            reasons.append(f"{key}: {e}")
+            continue
+        if not found:
+            reasons.append(f"{key}: an item is not valid here")
+            continue
+        value = found[0]
+        dumped = json.dumps(value, sort_keys=True)
+        if dumped in taken:
+            doubled.append(key)
+            continue
+        values[key] = value
+        taken.add(dumped)
+        if grounded and not guarded[0] and _guesses() == here and _kept(guarded[1], value):
+            marks.discard(key)
+    if not values and not reasons and not doubled:
+        raise Vacuous(f"no array to hold an item in model: {_brief(model)}")
+    return values, reasons, doubled
+
+_EXPLANATIONS = (" root invalid", " root", " bound", " present", " branch", " item",
                  " invalid", " missing", " extra", " bad", " overlap")
 
 _ROOT_INVALID = " root invalid"
@@ -2167,7 +2259,7 @@ def vectors(model: ModelType, resolver: Resolver|None = None, url: str = "",
     except UnsupportedValue as e:
         reasons.append(str(e))
         entries.append((0, ".", _note(f"bound values: {e}", "FAILED")[1]))
-    for step, generate in (("optional", optionals), ("branch", branches)):
+    for step, generate in (("optional", optionals), ("branch", branches), ("item", items)):
         try:
             step_marks: set[str] = set()
             found, skipped, doubled = generate(compiled, jm, marks=step_marks)
