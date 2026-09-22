@@ -1306,8 +1306,9 @@ def _sites(model: ModelType, mpath: list, vpath: list, frames: list,
                                   notes, disjunction, guarded)
         elif items:
             i, item = items[0]
+            held = {"@": model, ">=": 1, **_guarding(guarded, vpath)}
             yield from _sites(item, mpath + [i], vpath + [0],
-                              frames + [(vpath, {"@": model, ">=": 1})], jm, seen,
+                              frames + [(vpath, held)], jm, seen,
                               notes, disjunction, guarded)
     elif isinstance(model, dict):
         props = {p: m for p, m in model.items() if not p.startswith("#")}
