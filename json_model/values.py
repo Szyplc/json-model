@@ -7,7 +7,7 @@ import math
 import re
 import re._parser as _parser
 
-from .mtypes import ModelType, ModelArray, ModelObject, Jsonable, ModelError
+from .mtypes import ModelType, ModelArray, ModelObject, Jsonable, JsonScalar, ModelError
 from .model import JsonModel
 from .resolver import Resolver
 from .objops import merge
@@ -115,6 +115,10 @@ class Vacuous(UnsupportedValue):
     """The model is inherently empty or holds no constraint."""
     pass
 
+def _value_key(value: Jsonable) -> str:
+    """Comparison key of a generated value."""
+    return json.dumps(value, sort_keys=True)
+
 def _brief(model: ModelType, size: int = 60) -> str:
     """Short readable rendering of a model, for failure messages."""
     text = repr(model)
@@ -126,7 +130,7 @@ def _joined(reasons: list[str], limit: int = 8) -> str:
     text = "; ".join(kept[:limit])
     return text if len(kept) <= limit else f"{text}; and {len(kept) - limit} more"
 
-def _simplest_scalar(model: ModelType) -> Jsonable:
+def _simplest_scalar(model: ModelType) -> JsonScalar:
     """Simplest value for a scalar type inference model."""
     match model:
         case None:
@@ -328,7 +332,7 @@ def _variants(model: ModelType, jm: JsonModel, seen: frozenset[str],
             if isinstance(alt, str) and alt.startswith("#"):
                 continue
             for value in _variants(alt, jm, seen, count):
-                key = json.dumps(value, sort_keys=True)
+                key = _value_key(value)
                 if key not in keys:
                     keys.add(key)
                     values.append(value)
@@ -354,7 +358,7 @@ def _sized(target: ModelType, base: Jsonable, length: int, unique: bool,
     keys: set[str] = set()
     for model in models:
         for value in _variants(model, jm, seen, length):
-            key = json.dumps(value, sort_keys=True)
+            key = _value_key(value)
             if key not in keys:
                 keys.add(key)
                 values.append(value)
@@ -498,7 +502,7 @@ def _breaks(op: str, bound: Jsonable, value: Jsonable) -> bool:
             return False
         return _BREAKING[op](measure, bound)
     elif op == "!" and bound is True and isinstance(value, list):
-        dumped = [json.dumps(item, sort_keys=True) for item in value]
+        dumped = [_value_key(item) for item in value]
         return len(set(dumped)) < len(dumped)
     else:
         return False
@@ -593,7 +597,7 @@ def _outranking(node: ModelObject, prop: str) -> list[str]:
     else:
         return []
 
-def _names(prop: str, count: int, taken: set[str], outranking: list[str] = [],
+def _names(prop: str, count: int, taken: set[str], outranking: list[str],
            jm: JsonModel|None = None) -> list[str]:
     """Distinct property names matching a catch-all or pattern property model.
 
@@ -934,7 +938,7 @@ def _simplest_string(model: str, jm: JsonModel, seen: frozenset[str]) -> Jsonabl
     else:
         return model
 
-def _property_name(prop: str, taken: set[str], outranking: list[str] = [],
+def _property_name(prop: str, taken: set[str], outranking: list[str],
                    jm: JsonModel|None = None) -> str:
     """Property name matching a pattern property, free of any other key of the object."""
     def usable(name: str) -> bool:
@@ -1202,14 +1206,14 @@ def _overlapping(alts: ModelArray, jm: JsonModel,
     models: dict[str, ModelType] = {}
     for alt in alts:
         if not (isinstance(alt, str) and alt.startswith("#")):
-            models.setdefault(json.dumps(alt, sort_keys=True), alt)
+            models.setdefault(_value_key(alt), alt)
     built: dict[str, Jsonable] = {}
     for alt in models.values():
         try:
             value = simplest(alt, jm, seen)
         except UnsupportedValue:
             continue
-        dumped = json.dumps(value, sort_keys=True)
+        dumped = _value_key(value)
         if dumped in built:
             return [built[dumped]]
         built[dumped] = value
@@ -1399,7 +1403,7 @@ def _validated(sub: Jsonable, vpath: list, frames: list, doc: Jsonable,
         if isinstance(value, dict) and isinstance(doc, dict) and {**doc, **value} != value:
             wholes.append({**doc, **value})
         for whole in wholes:
-            if json.dumps(whole, sort_keys=True) in taken:
+            if _value_key(whole) in taken:
                 return [whole]
             elif not fallback:
                 fallback = [whole]
@@ -1452,7 +1456,7 @@ def _violations(model: ModelType, jm: JsonModel|None = None,
 
     def repeats(key: str, value: Jsonable) -> bool:
         """Whether a violation repeats a value already generated as valid."""
-        if json.dumps(value, sort_keys=True) not in valid:
+        if _value_key(value) not in valid:
             return False
         skip(f"{key}: valid for the model")
         return True
@@ -1497,7 +1501,7 @@ def _violations(model: ModelType, jm: JsonModel|None = None,
             except UnsupportedValue as e:
                 failure(key, e)
                 continue
-            dumped = json.dumps(value, sort_keys=True)
+            dumped = _value_key(value)
             if dumped in taken:
                 doubles(key)
                 continue
@@ -1518,14 +1522,14 @@ def _violations(model: ModelType, jm: JsonModel|None = None,
             except UnsupportedValue as e:
                 failure(key, e)
                 break
-            if json.dumps(value, sort_keys=True) in taken:
+            if _value_key(value) in taken:
                 doubles(key)
                 break
             elif repeats(key, value):
                 break
             proposed(key)
             values[key] = value
-            taken.add(json.dumps(value, sort_keys=True))
+            taken.add(_value_key(value))
             break
         else:
             skip(f"{key}: no type breaks the model here")
@@ -1542,13 +1546,13 @@ def _violations(model: ModelType, jm: JsonModel|None = None,
         except UnsupportedValue as e:
             failure(key, e)
             continue
-        if json.dumps(value, sort_keys=True) in taken:
+        if _value_key(value) in taken:
             doubles(key)
             continue
         elif repeats(key, value):
             continue
         proposed(key)
-        taken.add(json.dumps(value, sort_keys=True))
+        taken.add(_value_key(value))
         values[key] = value
     for mpath, vpath, frames, node, disjunction, guarded in _object_sites(sites):
         try:
@@ -1568,13 +1572,13 @@ def _violations(model: ModelType, jm: JsonModel|None = None,
             except UnsupportedValue as e:
                 failure(key, e)
                 break
-            if json.dumps(value, sort_keys=True) in taken:
+            if _value_key(value) in taken:
                 doubles(key)
                 continue
             elif repeats(key, value):
                 continue
             proposed(key)
-            taken.add(json.dumps(value, sort_keys=True))
+            taken.add(_value_key(value))
             values[key] = value
     for mpath, vpath, frames, node, disjunction, guarded in _object_sites(sites):
         if not _closed(node, jm):
@@ -1597,14 +1601,14 @@ def _violations(model: ModelType, jm: JsonModel|None = None,
             except UnsupportedValue as e:
                 failure(key, e)
                 break
-            if json.dumps(value, sort_keys=True) in taken:
+            if _value_key(value) in taken:
                 doubles(key)
                 break
             elif repeats(key, value):
                 break
             proposed(key)
             values[key] = value
-            taken.add(json.dumps(value, sort_keys=True))
+            taken.add(_value_key(value))
             break
         else:
             skip(f"{_mpath(mpath)} extra: every extra property is valid")
@@ -1621,7 +1625,7 @@ def _violations(model: ModelType, jm: JsonModel|None = None,
         except UnsupportedValue as e:
             failure(key, e)
             continue
-        dumped = json.dumps(value, sort_keys=True)
+        dumped = _value_key(value)
         if dumped in taken:
             doubles(key)
             continue
@@ -1633,7 +1637,7 @@ def _violations(model: ModelType, jm: JsonModel|None = None,
     vdefs = _defs(vjm)
     vraw = vjm._init_md if vmodel is vjm._model else vmodel
     for candidate in _ROOT_TYPES:
-        dumped = json.dumps(candidate, sort_keys=True)
+        dumped = _value_key(candidate)
         shown = f"'{candidate}'" if isinstance(candidate, str) else dumped
         if dumped in taken:
             doubles(_rooted(candidate))
@@ -1720,7 +1724,7 @@ def optionals(model: ModelType, jm: JsonModel|None = None,
         raise
     except UnsupportedValue as e:
         reasons.append(f"optional values: no document to alter: {e}")
-    taken = set() if doc is None else {json.dumps(doc, sort_keys=True)}
+    taken = set() if doc is None else {_value_key(doc)}
     for mpath, vpath, frames, node, disjunction, guarded in _object_sites(sites):
         props = _optional_props(node, jm, seen)
         if not props:
@@ -1748,7 +1752,7 @@ def optionals(model: ModelType, jm: JsonModel|None = None,
                 reasons.append(f"{key}: adding {name} is not valid")
                 continue
             value = found[0]
-            dumped = json.dumps(value, sort_keys=True)
+            dumped = _value_key(value)
             if dumped in taken:
                 doubled.append(key)
                 continue
@@ -1778,7 +1782,7 @@ def branches(model: ModelType, jm: JsonModel|None = None,
         raise
     except UnsupportedValue as e:
         reasons.append(f"branch values: no document to alter: {e}")
-    taken = set() if doc is None else {json.dumps(doc, sort_keys=True)}
+    taken = set() if doc is None else {_value_key(doc)}
     for mpath, vpath, frames, node, op, disjunction, guarded in _alternatives(sites):
         for index, alt in enumerate(node[op]):
             if isinstance(alt, str) and alt.startswith("#"):
@@ -1798,7 +1802,7 @@ def branches(model: ModelType, jm: JsonModel|None = None,
                 reasons.append(f"{key}: the alternative is not valid here")
                 continue
             value = found[0]
-            dumped = json.dumps(value, sort_keys=True)
+            dumped = _value_key(value)
             if dumped in taken:
                 doubled.append(key)
                 continue
@@ -1833,7 +1837,7 @@ def items(model: ModelType, jm: JsonModel|None = None,
         raise
     except UnsupportedValue as e:
         reasons.append(f"item values: no document to alter: {e}")
-    taken = set() if doc is None else {json.dumps(doc, sort_keys=True)}
+    taken = set() if doc is None else {_value_key(doc)}
     for mpath, vpath, frames, node, item, disjunction, guarded in _array_sites(sites):
         key = f"{_mpath(mpath)} item"
         if key in values:
@@ -1852,7 +1856,7 @@ def items(model: ModelType, jm: JsonModel|None = None,
             reasons.append(f"{key}: an item is not valid here")
             continue
         value = found[0]
-        dumped = json.dumps(value, sort_keys=True)
+        dumped = _value_key(value)
         if dumped in taken:
             doubled.append(key)
             continue
@@ -1939,7 +1943,7 @@ def _recheck(entries: list[tuple[int, str, list]], model: ModelType,
         if entry[0].endswith(_AGREES):
             return False
         return results[index] is None or results[index] == entry[1][0]
-    stated = {json.dumps(entry[1][1], sort_keys=True)
+    stated = {_value_key(entry[1][1])
               for index, entry in enumerate(judged) if settled(index, entry)}
     refused = False
     for index, entry in enumerate(judged):
@@ -1947,7 +1951,7 @@ def _recheck(entries: list[tuple[int, str, list]], model: ModelType,
         result = results[index]
         if result is False and entry[0].startswith(_SIMPLEST):
             refused = True
-        dumped = json.dumps(value, sort_keys=True)
+        dumped = _value_key(value)
         marked = entry[0].endswith(_AGREES)
         if marked and dumped in stated:
             commented(entry, _REPEATED)
@@ -1978,7 +1982,7 @@ def vectors(model: ModelType, resolver: Resolver|None = None, url: str = "",
     try:
         valid = simplest(compiled, jm)
         entries.append((0, ".", ["# . simplest", [True, valid]]))
-        taken.add(json.dumps(valid, sort_keys=True))
+        taken.add(_value_key(valid))
     except Vacuous as e:
         reasons.append(str(e))
         entries.append((0, ".", _note(f". simplest: {e}", "SKIPPED")[1]))
@@ -1989,7 +1993,7 @@ def vectors(model: ModelType, resolver: Resolver|None = None, url: str = "",
         marks: set[str] = set()
         found = bounds(compiled, jm, marks=marks)
         for key, value in found.items():
-            dumped = json.dumps(value, sort_keys=True)
+            dumped = _value_key(value)
             if dumped in taken:
                 entries.append((0, *_note(f"{key} bound", "DUPLICATE")))
                 continue
@@ -2005,7 +2009,7 @@ def vectors(model: ModelType, resolver: Resolver|None = None, url: str = "",
             step_marks: set[str] = set()
             found, skipped, doubled = generate(compiled, jm, marks=step_marks)
             for key, value in found.items():
-                dumped = json.dumps(value, sort_keys=True)
+                dumped = _value_key(value)
                 if dumped in taken:
                     entries.append((0, *_note(key, "DUPLICATE")))
                     continue
