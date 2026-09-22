@@ -1509,8 +1509,9 @@ def _violations(model: ModelType, jm: JsonModel|None = None,
         key = f"{_mpath(mpath)} invalid"
         if not mpath or set(props) - {"@"} or key in values:
             continue
-        target = _ultimate(jm, props["@"])
-        for candidate in _justified(target):
+        node = (disjunction[1] if disjunction is not None and vpath == disjunction[0]
+                else props["@"])
+        for candidate in _justified(_ultimate(jm, node)):
             try:
                 value = _document(copy.deepcopy(candidate), vpath, frames, doc, jm, seen)
             except UnsupportedValue as e:
@@ -1645,7 +1646,8 @@ def _violations(model: ModelType, jm: JsonModel|None = None,
     if not values:
         if not reasons:
             reasons.append("no violation site could be used")
-        raise UnsupportedValue(f"no constraint could be violated: {_joined(reasons)}")
+        note = f"no constraint could be violated: {_joined(reasons)}"
+        raise UnsupportedValue(note) if failed else Vacuous(note)
     else:
         covered = values.keys() | {n.partition(": ")[0] for n in skipped} | set(doubled)
         return (values, skipped, doubled,
