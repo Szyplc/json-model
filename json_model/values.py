@@ -441,20 +441,6 @@ _PREDEF_NAMES = {name: check for name, check in
                   if not predef.startswith("$__"))
                  if check is not None}
 
-def _referred(prop: str, jm: JsonModel) -> tuple[ModelType, JsonModel]: # check if is is already implemented and use json model implementation resolveref, resolvedef already checking cycles
-    """Model a property key reference stands for, stopping at a predefined name."""
-    seen: set[str] = set()
-    target: ModelType = prop
-    while (isinstance(target, str) and target.startswith("$")
-           and target[1:] not in PREDEFS and target not in seen):
-        seen.add(target)
-        try:
-            node = jm.resolveRef(target, [])
-        except (ModelError, AssertionError):
-            return prop, jm # we don't want to generate value for ( user bug )
-        target, jm = node._model, node
-    return target, jm
-
 def _matches(name: str, prop: str, jm: JsonModel|None = None) -> bool|None:
     """Whether a name matches an object model property key, None if undecided.
 
@@ -481,10 +467,10 @@ def _matches(name: str, prop: str, jm: JsonModel|None = None) -> bool|None:
     elif prop.startswith("$"):
         if jm is None or prop[1:] in PREDEFS:
             return None
-        target, scope = _referred(prop, jm)
-        if not isinstance(target, str) or target == prop:
+        scope = jm.resolveRef(prop, [])
+        if not isinstance(scope._model, str) or scope._model == prop:
             return None
-        return _matches(name, target, scope)
+        return _matches(name, scope._model, scope)
     else:
         return name == (prop[1:] if prop.startswith(("!", "?", "_")) else prop)
 
