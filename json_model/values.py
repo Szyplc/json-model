@@ -335,6 +335,11 @@ def _variants(model: ModelType, jm: JsonModel, seen: frozenset[str],
 def _sized(target: ModelType, base: Jsonable, length: int, unique: bool,
            jm: JsonModel, seen: frozenset[str]) -> Jsonable:
     """Value of a given length for a resizable string or array model."""
+    if jm._isRef(target):
+        jm = jm.resolveRef(target, [])
+        target = jm._model
+    if jm._isPredef(target):
+        target = PREDEFS[target[1:]]
     if isinstance(base, str):
         if target != "":
             raise UnsupportedValue(f"cannot resize string model: {target}")
@@ -383,40 +388,36 @@ def _holding(target: ModelArray, item: ModelType, ops: ModelObject,
     else:
         return [_filled(item, jm, seen) for _ in range(length)]
 
-def _ultimate(jm: JsonModel, model: ModelType) -> set[type]|None:
-    """JSON types a model accepts, widened for a loose float model."""
-
-    alts = model["|"] if isinstance(model, dict) and "|" in model else [model]
+def _kinds(jm: JsonModel, model: ModelType, seen: frozenset[str]) -> set[type]|None:
+    """JSON types a model accepts, looking through references into unions, None if unknown."""
+    if jm._isRef(model):
+        node = jm.resolveRef(model, [])
+        if node._url not in seen:
+            model, jm, seen = node._model, node, seen | {node._url}
+    op = next((o for o in ("|", "^") if isinstance(model, dict) and o in model), None)
+    if op is None:
+        kind = analyze.ultimate_type(jm, model)
+        return None if kind is None else {kind}
     kinds: set[type] = set()
-    try:
-        for alt in alts:
-            if isinstance(alt, str) and alt.startswith("#"):
-                continue
-            kind = analyze.ultimate_type(jm, alt)
-            if kind is None:
-                return None
-            kinds.add(kind)
-    except Exception:
-        return None
-    
-    # Fabien version good to raise it not hide it
-    ut = analyze.ultimate_type(model)
-    if ut is TopType and "|" in model:
-        kinds = {...} - {None}
-        if TopType in kinds:
-            return _ALL_TYPES_SET
-        if kinds == {}
+    for alt in model[op]:
+        if isinstance(alt, str) and alt.startswith("#"):
+            continue
+        found = _kinds(jm, alt, seen)
+        if found is None:
             return None
+        kinds |= found
+    return kinds
 
-    elif ut is TopType:
-        return _ALL_TYPES_SET
-    elif ut is None:
+def _ultimate(jm: JsonModel, model: ModelType) -> set[type]|None:
+    """JSON types a model accepts, None when any may be, an int always fitting a float."""
+    try:
+        kinds = _kinds(jm, model, frozenset())
+    except ModelError:
         return None
-
-    if float in kinds and jm._loose_float:
-        kinds = kinds | {int}
-    if int in kinds and jm._loose_int:
-        kinds = kinds | {float}
+    if kinds is not None and float in kinds:
+        kinds.add(int)
+    if kinds is not None and int in kinds and jm._loose_int:
+        kinds.add(float)
     return kinds
 
 def _mistyped(value: Jsonable, kinds: set[type]|None) -> bool:
@@ -562,6 +563,9 @@ def _names(prop: str, count: int, taken: set[str], outranking: list[str],
 def _grown(target: ModelType, base: ModelObject, length: int,
            jm: JsonModel, seen: frozenset[str]) -> Jsonable:
     """Object of a given size, extended with optional or free properties."""
+    if jm._isRef(target):
+        jm = jm.resolveRef(target, [])
+        target = jm._model
     if not isinstance(target, dict) or set(target) & (_OPERATORS | _ROOT_KEYS):
         raise UnsupportedValue(f"cannot resize object model: {target}")
     elif len(base) > length:
@@ -584,24 +588,6 @@ def _grown(target: ModelType, base: ModelObject, length: int,
         raise UnsupportedValue(f"cannot reach {length} properties: {target}")
     else:
         return value
-
-def _resolved(target: ModelType, jm: JsonModel,
-              seen: frozenset[str]) -> tuple[ModelType, JsonModel, frozenset[str]]: # reimplementation resolveRef use resolveRef
-    """Model behind a predefined name or a reference, with its own scope."""
-    names: set[str] = set()
-    while isinstance(target, str) and target.startswith("$") and target not in names:
-        names.add(target)
-        if target[1:] in PREDEFS:
-            target = PREDEFS[target[1:]]
-        else:
-            try:
-                ja = jm.resolveRef(target, [])
-            except (ModelError, AssertionError):
-                break
-            if ja._url in seen:
-                break
-            target, jm, seen = ja._model, ja, seen | {ja._url}
-    return target, jm, seen
 
 def _simplest_constrained(props: ModelObject, jm: JsonModel, seen: frozenset[str]) -> Jsonable:
     """Simplest value for a constraint model. To use only without comments"""
@@ -631,7 +617,6 @@ def _simplest_constrained(props: ModelObject, jm: JsonModel, seen: frozenset[str
             and not ("!=" in ops and len(base) == ops["!="])):
         return base
     length = int(_pick(lo, hi, ops, 1, 0))
-    target, jm, seen = _resolved(target, jm, seen)
     if isinstance(base, dict):
         return _grown(target, base, length, jm, seen)
     value = _sized(target, base, length, unique, jm, seen)
@@ -945,8 +930,7 @@ def _violation_value(op: str, bound: Jsonable, props: ModelObject, base: Jsonabl
             raise UnsupportedValue(f"unsupported unique constraint: {bound}")
         lo, hi = _bounds(ops, 1, 0)
         lo = 2 if lo is None else max(lo, 2)
-        node, njm, nseen = _resolved(target, jm, seen) # can we skip that 
-        return _sized(node, base, int(_pick(lo, hi, ops, 1, 0)), False, njm, nseen)
+        return _sized(target, base, int(_pick(lo, hi, ops, 1, 0)), False, jm, seen)
     is_float = isinstance(base, float)
     table = _FLOAT_VIOLATIONS if is_float else _INT_VIOLATIONS
     if op not in table:
@@ -961,8 +945,7 @@ def _violation_value(op: str, bound: Jsonable, props: ModelObject, base: Jsonabl
     elif candidate < 0:
         raise UnsupportedValue(f"no length violates {op} {bound}")
     else:
-        node, njm, nseen = _resolved(target, jm, seen) # can we skip that 
-        return _sized(node, base, candidate, ops.get("!") is True, njm, nseen)
+        return _sized(target, base, candidate, ops.get("!") is True, jm, seen)
 
 def _candidates(op: str, bound: Jsonable, props: ModelObject, base: Jsonable,
                 jm: JsonModel, seen: frozenset[str]): # Check it 
@@ -1017,11 +1000,10 @@ def _bound_value(table: dict, op: str, bound: Jsonable, props: ModelObject,
         return candidate
     elif candidate < 0:
         raise UnsupportedValue(f"no length reaches {op} {bound}")
-    node, njm, nseen = _resolved(target, jm, seen)
     if isinstance(base, dict):
-        return _grown(node, base, candidate, njm, nseen)
+        return _grown(target, base, candidate, jm, seen)
     else:
-        return _sized(node, base, candidate, ops.get("!") is True, njm, nseen)
+        return _sized(target, base, candidate, ops.get("!") is True, jm, seen)
 
 def _bound_candidates(op: str, bound: Jsonable, props: ModelObject, base: Jsonable,
                       jm: JsonModel, seen: frozenset[str]):
