@@ -700,15 +700,6 @@ def _violation_value(op: str, bound: Jsonable, props: ModelObject, base: Jsonabl
     else:
         return _sized(target, base, candidate, ops.get("!") is True, jm, seen)
 
-def _candidates(op: str, bound: Jsonable, props: ModelObject, base: Jsonable,
-                jm: JsonModel, seen: frozenset[str]): # Check it 
-    """Values which may break a constraint, best first."""
-    try:
-        yield _violation_value(op, bound, props, base, jm, seen)
-    except UnsupportedValue:
-        pass
-    yield base
-
 def _violations_constrained(props: ModelObject, jm: JsonModel,
                             seen: frozenset[str]) -> dict[str, Jsonable]:
     """One value per constraint, meant to break only that one."""
@@ -723,11 +714,11 @@ def _violations_constrained(props: ModelObject, jm: JsonModel,
         raise UnsupportedValue(f"unique constraint on a non-array: {target}")
     values: dict[str, Jsonable] = {}
     for op, bound in ops.items():
-        values[op] = next(_candidates(op, bound, props, base, jm, seen))
-    if not values:
-        raise UnsupportedValue(f"no constraint could be violated: {props}")
-    else:
-        return values
+        try:
+            values[op] = _violation_value(op, bound, props, base, jm, seen)
+        except UnsupportedValue:
+            values[op] = base
+    return values
 
 def _bound_value(table: dict, op: str, bound: Jsonable, props: ModelObject,
                  base: Jsonable, jm: JsonModel, seen: frozenset[str]) -> Jsonable:
