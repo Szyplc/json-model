@@ -57,7 +57,6 @@ _PI = 3.1415927
 _TYPE_VIOLATIONS = [None, True, 0, "", [], {}]
 _ROOT_TYPES = [None, True, False, -42, _PI, "", "unexpected", [], [1, "expected"], {}, {"un": "expected"}]
 _EXTRA_NAMES = ["no-such-prop", "no-such-property", "no-such-property1"]
-_UINT_PREDEFS = {"$U32", "$U64"}
 _PREDEFS = {
     "$ANY": {}, "$NULL": None,
     "$BOOL": False, "$BOOLEAN": False,
@@ -217,8 +216,6 @@ def _numeric_low(model: ModelType) -> int|float|None:
         return None
     elif isinstance(model, (int, float)):
         return None if model in (-1, -1.0) else model
-    elif isinstance(model, str) and model in _UINT_PREDEFS:
-        return 0
     else:
         return None
 
@@ -527,7 +524,7 @@ def _simplest_constrained(props: ModelObject, jm: JsonModel, seen: frozenset[str
     if isinstance(base, (int, float)):
         is_float = isinstance(base, float)
         step: int|float = 1.0 if is_float else 1
-        low = _numeric_low(jm.resolveRef(target, [])._model if jm._isRef(target) else target)
+        low = _numeric_low(analyze.ultimate_model(jm, target))
         lo, hi = _bounds(ops, step, low)
         value = _pick(lo, hi, ops, step, 0.0 if is_float else 0)
         return float(value) if is_float else int(value)
