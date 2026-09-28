@@ -617,11 +617,7 @@ def _simplest_object(model: ModelObject, jm: JsonModel, seen: frozenset[str]) ->
             return _simplest_constrained(props, jm, seen)
     value: dict[str, Jsonable] = {}
     for prop, submodel in props.items():
-        if prop in _OPERATORS: # it can't happen we check it before
-            raise UnsupportedValue(f"unsupported object operator: {prop}")
-        elif prop in _ROOT_KEYS: # propably dead code, if not skip
-            raise UnsupportedValue(f"unsupported definitions or imports: {prop}")
-        elif prop == "" or prop.startswith(("?", "/", "$")):
+        if prop == "" or prop.startswith(("?", "/", "$")):
             continue
         else:
             name = prop[1:] if prop.startswith(("!", "_")) else prop
