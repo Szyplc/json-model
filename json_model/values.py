@@ -30,14 +30,6 @@ _ANY_CHAR = "a"
 _ITEM_VARIANTS = 2
 _NAME_CHARS = "abcdefghijklmnopqrstuvwxyz"
 _ANY_NAME_PREDEFS = {"$ANY", "$STRING"}
-_TYPE_PREDEFS = {
-    "$NULL": {type(None)}, "$NONE": set(),
-    "$BOOL": {bool}, "$BOOLEAN": {bool},
-    "$INT": {int}, "$INTEGER": {int}, "$I32": {int}, "$I64": {int},
-    "$U32": {int}, "$U64": {int},
-    "$FLOAT": {float}, "$F32": {float}, "$F64": {float},
-    "$NUMBER": {int, float},
-}
 _NO_NAME_PREDEFS = {
     "$NULL", "$NONE", "$BOOL", "$BOOLEAN", "$INT", "$INTEGER", "$I32", "$I64",
     "$U32", "$U64", "$FLOAT", "$F32", "$F64", "$NUMBER",
@@ -89,22 +81,22 @@ _PREDEFS = {
     "$UUID": "00000000-0000-0000-0000-000000000000", "$CARD": "4111111111111111",
     "$IP4": "0.0.0.0", "$IP6": "::", "$HOST": "json-model.org",
     "$ETH": "00:00:00:00:00:00",
-    "$URL": "https://json-model.org/", "$URI": "https://json-model.org/",
-    "$URL_REL": "/", "$EMAIL": "susie@json-model.org",
+    "$URL": "https://json.org/", "$URI": "https://json.org/",
+    "$URL_REL": "/", "$EMAIL": "susie@json.org",
     "$JSON": "null", "$SEMVER": "0.0.0",
 }
 
 _PREDEF_VIOLATIONS = {
     "$U32": -1, "$U64": -1,
-    "$REGEX": "[", "$EXREG": "[", "$JSONPT": "a",
-    "$DATE": "1970-13-45", "$TIME": "25:00:00", "$TIMETZ": "00:00:00",
-    "$DATETIME": "1970-01-01T25:00:00", "$DURATION": "P",
-    "$UUID": "00000000-0000-0000-0000-00000000000", "$CARD": "411111111111111",
-    "$IP4": "256.0.0.1", "$IP6": "xyz::", "$HOST": "json model.org",
-    "$ETH": "00:00:00:00:00",
-    "$URL": "https://json model.org/", "$URI": "https://json model.org/",
-    "$URL_REL": "http://[bad", "$EMAIL": "susie@@json-model.org",
-    "$JSON": "{", "$SEMVER": "0.0",
+    "$REGEX": "[ not a regex", "$EXREG": "[ not a exreg", "$JSONPT": "not a jsonpt",
+    "$DATE": "not a date", "$TIME": "not a time", "$TIMETZ": "not a timetz",
+    "$DATETIME": "not a datetime", "$DURATION": "not a duration",
+    "$UUID": "not a uuid", "$CARD": "not a card",
+    "$IP4": "not a ip4", "$IP6": "not a ip6", "$HOST": "not a host",
+    "$ETH": "not a eth",
+    "$URL": "not a url", "$URI": "not a uri",
+    "$URL_REL": "not a relative url", "$EMAIL": "not an email address",
+    "$JSON": "not a json value", "$SEMVER": "not a version",
 }
 
 class UnsupportedValue(Exception):
@@ -146,7 +138,7 @@ def _simplest_scalar(model: ModelType) -> JsonScalar:
         case _:
             raise UnsupportedValue(f"not a scalar model: {model}")
 
-def _simplest_constant(model: str) -> Jsonable:
+def _simplest_constant(model: str) -> JsonScalar:
     """Simplest value for a scalar constant model."""
     if model in _CONSTANTS:
         return _CONSTANTS[model]
@@ -315,7 +307,7 @@ def _variants(model: ModelType, jm: JsonModel, seen: frozenset[str],
     elif isinstance(model, str) and not model.startswith(("/", "$")):
         values = [_simplest_string(model, jm, seen)]
     elif model == "$ANY":
-        values = [{}, None, False, True, 0, "", []]
+        values = [{}, None, False, True, 0, "", []] + [_ANY_CHAR * i for i in range(1, count - 6)]
     elif isinstance(model, str) and model[1:] in PREDEFS:
         values = _variants(PREDEFS[model[1:]], jm, seen, count)
     elif isinstance(model, str) and model.startswith("$"):
@@ -326,7 +318,7 @@ def _variants(model: ModelType, jm: JsonModel, seen: frozenset[str],
         else:
             values = ([] if ja._url in seen
                       else _variants(ja._model, ja, seen | {ja._url}, count))
-    elif isinstance(model, dict) and set(model) == {"|"}:
+    elif isinstance(model, dict) and set(model) == {"|"}: # "|" in model
         values, keys = [], set()
         for alt in model["|"]:
             if isinstance(alt, str) and alt.startswith("#"):
@@ -346,6 +338,8 @@ def _sized(target: ModelType, base: Jsonable, length: int, unique: bool,
     if isinstance(base, str):
         if target != "":
             raise UnsupportedValue(f"cannot resize string model: {target}")
+        elif length <= len(_NAME_CHARS):
+            return _NAME_CHARS[:length]
         else:
             return _ANY_CHAR * length
     items = [i for i in target if not (isinstance(i, str) and i.startswith("#"))]
@@ -376,7 +370,7 @@ def _filled(model: ModelType, jm: JsonModel, seen: frozenset[str]) -> Jsonable:
 
 def _holding(target: ModelArray, item: ModelType, ops: ModelObject,
              jm: JsonModel, seen: frozenset[str]) -> Jsonable|None:
-    """Shortest non-empty array a model accepts, None when its constraints forbid one."""
+    """Shortest non-empty array a model accepts, None when its constraints forbid any."""
     lo, hi = _bounds(ops, 1, 1)
     if hi is not None and hi < 1:
         return None
@@ -389,87 +383,39 @@ def _holding(target: ModelArray, item: ModelType, ops: ModelObject,
     else:
         return [_filled(item, jm, seen) for _ in range(length)]
 
-def _typed(jm: JsonModel, model: ModelType, seen: frozenset[str],
-           approx: dict[str, set[type]|None], found: dict[str, set[type]|None]) -> set[type]|None:
-    """JSON types a model accepts, None when they cannot be enumerated.
-
-    A reference met again stands for its current approximation, and what each
-    reference yields is recorded, so that iterating reaches the least fixpoint.
-    """
-    if isinstance(model, str):
-        if model in _TYPE_PREDEFS:
-            return set(_TYPE_PREDEFS[model])
-        elif model == "$ANY":
-            return None
-        elif model.startswith("$"):
-            name = model[1:]
-            if model in seen:
-                return approx.get(model, set())
-            elif name in jm._defs._syms:
-                node = jm._defs._syms[name]
-            elif name in PREDEFS:
-                return {str}
-            else:
-                try:
-                    node = jm.resolveRef(model, [])
-                except (ModelError, AssertionError):
-                    return None
-            found[model] = _typed(node, node._model, seen | {model}, approx, found)
-            return found[model]
-        elif model.startswith("="):
-            return ({type(None)} if model == "=null" else
-                    {bool} if model in ("=true", "=false") else
-                    {float} if any(c in model for c in ".eE") else {int})
-        else:
-            return {str}
-    elif isinstance(model, list):
-        return {list}
-    elif isinstance(model, dict):
-        props = {p: m for p, m in model.items() if not p.startswith("#")}
-        if "@" in props:
-            return _typed(jm, props["@"], seen, approx, found)
-        elif "|" in props or "^" in props:
-            op = "|" if "|" in props else "^"
-            kept: set[type] = set()
-            for alt in props[op]:
-                if isinstance(alt, str) and alt.startswith("#"):
-                    continue
-                kinds = _typed(jm, alt, seen, approx, found)
-                if kinds is None:
-                    return None
-                kept |= kinds
-            return kept
-        elif "&" in props:
-            shared: set[type]|None = None
-            for alt in props["&"]:
-                if isinstance(alt, str) and alt.startswith("#"):
-                    continue
-                kinds = _typed(jm, alt, seen, approx, found)
-                if kinds is not None:
-                    shared = kinds if shared is None else shared & kinds
-            return shared
-        elif set(props) & _ROOT_KEYS:
-            return None
-        else:
-            return {dict}
-    else:
-        return {type(model)} if not isinstance(model, bool) else {bool}
-
 def _ultimate(jm: JsonModel, model: ModelType) -> set[type]|None:
     """JSON types a model accepts, widened for a loose float model."""
+
+    alts = model["|"] if isinstance(model, dict) and "|" in model else [model]
+    kinds: set[type] = set()
     try:
-        approx: dict[str, set[type]|None] = {}
-        while True:
-            found = dict(approx)
-            kinds = _typed(jm, model, frozenset(), approx, found)
-            if found == approx:
-                break
-            approx = found
+        for alt in alts:
+            if isinstance(alt, str) and alt.startswith("#"):
+                continue
+            kind = analyze.ultimate_type(jm, alt)
+            if kind is None:
+                return None
+            kinds.add(kind)
     except Exception:
         return None
-    if kinds is not None and float in kinds and jm._loose_float:
+    
+    # Fabien version good to raise it not hide it
+    ut = analyze.ultimate_type(model)
+    if ut is TopType and "|" in model:
+        kinds = {...} - {None}
+        if TopType in kinds:
+            return _ALL_TYPES_SET
+        if kinds == {}
+            return None
+
+    elif ut is TopType:
+        return _ALL_TYPES_SET
+    elif ut is None:
+        return None
+
+    if float in kinds and jm._loose_float:
         kinds = kinds | {int}
-    if kinds is not None and int in kinds and jm._loose_int:
+    if int in kinds and jm._loose_int:
         kinds = kinds | {float}
     return kinds
 
@@ -492,7 +438,7 @@ def _measured(value: Jsonable) -> int|float|None:
     else:
         return None
 
-def _breaks(op: str, bound: Jsonable, value: Jsonable) -> bool:
+def _breaks(op: str, bound: Jsonable, value: Jsonable) -> bool: # try to remove that function
     """Whether a value certainly violates one constraint of an object model."""
     if op in _COMPARISONS:
         if isinstance(bound, str):
@@ -507,15 +453,8 @@ def _breaks(op: str, bound: Jsonable, value: Jsonable) -> bool:
     else:
         return False
 
-
-
 def _checked(predef: str):
-    """Format check the project already writes for a predefined model, if any.
-
-    The backend implementation when there is one, otherwise the approximate
-    regex the backends without one fall back to, so that nothing here is a
-    second opinion of its own.
-    """
+    """Existing format check for a predefined model: its backend implementation, else the fallback regex."""
     if predef in PYTHON_RUNTIME_PREDEFS:
         checker = getattr(support, PYTHON_RUNTIME_PREDEFS[predef])
         return lambda name: checker(name, "", None)
@@ -532,7 +471,7 @@ _PREDEF_NAMES = {name: check for name, check in
                   if not predef.startswith("$__"))
                  if check is not None}
 
-def _referred(prop: str, jm: JsonModel) -> tuple[ModelType, JsonModel]:
+def _referred(prop: str, jm: JsonModel) -> tuple[ModelType, JsonModel]: # check if is is already implemented and use json model implementation resolveref, resolvedef already checking cycles
     """Model a property key reference stands for, stopping at a predefined name."""
     seen: set[str] = set()
     target: ModelType = prop
@@ -542,7 +481,7 @@ def _referred(prop: str, jm: JsonModel) -> tuple[ModelType, JsonModel]:
         try:
             node = jm.resolveRef(target, [])
         except (ModelError, AssertionError):
-            return prop, jm
+            return prop, jm # we don't want to generate value for ( user bug )
         target, jm = node._model, node
     return target, jm
 
@@ -647,7 +586,7 @@ def _grown(target: ModelType, base: ModelObject, length: int,
         return value
 
 def _resolved(target: ModelType, jm: JsonModel,
-              seen: frozenset[str]) -> tuple[ModelType, JsonModel, frozenset[str]]:
+              seen: frozenset[str]) -> tuple[ModelType, JsonModel, frozenset[str]]: # reimplementation resolveRef use resolveRef
     """Model behind a predefined name or a reference, with its own scope."""
     names: set[str] = set()
     while isinstance(target, str) and target.startswith("$") and target not in names:
@@ -665,18 +604,20 @@ def _resolved(target: ModelType, jm: JsonModel,
     return target, jm, seen
 
 def _simplest_constrained(props: ModelObject, jm: JsonModel, seen: frozenset[str]) -> Jsonable:
-    """Simplest value for a constraint model."""
+    """Simplest value for a constraint model. To use only without comments"""
     target = props["@"]
     ops = {p: c for p, c in props.items() if p != "@"}
-    if any(isinstance(c, str) for p, c in ops.items() if p in _COMPARISONS):
-        raise UnsupportedValue(f"unsupported string comparison constraint: {ops}")
-    if any(isinstance(c, bool) or not isinstance(c, (int, float))
-           for p, c in ops.items() if p in _COMPARISONS):
-        raise UnsupportedValue(f"unsupported comparison constraint: {ops}")
-    unique = ops.get("!") is True
+    #if any(isinstance(c, str) for p, c in ops.items() if p in _COMPARISONS):
+    #    raise UnsupportedValue(f"unsupported string comparison constraint: {ops}")
+    #if any(isinstance(c, bool) or not isinstance(c, (int, float))
+    #       for p, c in ops.items() if p in _COMPARISONS):
+    #    raise UnsupportedValue(f"unsupported comparison constraint: {ops}")
+    
+    # keep only integer and float comparision, keep and unique
+    unique = ops.get("!") is True # unique never is False optimizer will remove it
     base = simplest(target, jm, seen)
-    if base is None or isinstance(base, bool):
-        raise UnsupportedValue(f"unsupported constrained model: {target}")
+    if base is None or isinstance(base, bool): # make assert from if
+        raise UnsupportedValue(f"unsupported constrained model: {target}") # {"@": true, "=": false} take this example, generator assume that type have sense, so we assume that compiler check it
     elif unique and not isinstance(base, list):
         raise UnsupportedValue(f"unique constraint on a non-array: {target}")
     elif isinstance(base, (int, float)):
@@ -694,7 +635,7 @@ def _simplest_constrained(props: ModelObject, jm: JsonModel, seen: frozenset[str
     if isinstance(base, dict):
         return _grown(target, base, length, jm, seen)
     value = _sized(target, base, length, unique, jm, seen)
-    if unique and length > 1 and _breaks("!", True, value):
+    if unique and length > 1 and _breaks("!", True, value): # remove it breaks and we don't check break later
         raise UnsupportedValue(f"unique constraint is not satisfiable: {target}")
     else:
         return value
@@ -713,13 +654,13 @@ def _simplest_union(alts: ModelArray, jm: JsonModel, seen: frozenset[str]) -> Js
 
 _CHECKERS: dict[str, EntryCheckFun|None] = {}
 
-def _defs(jm: JsonModel) -> ModelObject:
+def _defs(jm: JsonModel) -> ModelObject: # check if it is already in jm ( check if we need that )
     """Definitions of a model, by name."""
     base = jm._url.split("#")[0]
     return {name: ("$" + node._url if node._url.split("#")[0] != base else node._model)
             for name, node in jm._defs._syms.items()}
 
-def _needed(model: ModelType, defs: ModelObject) -> set[str]:
+def _needed(model: ModelType, defs: ModelObject) -> set[str]: # terible function check it or REMOVE IT
     """Definition names a model may reference."""
     keep: set[str] = set()
     pending = [model]
@@ -731,7 +672,7 @@ def _needed(model: ModelType, defs: ModelObject) -> set[str]:
                 pending.append(defs[name])
     return keep
 
-def _hoisted(model: ModelType, defs: ModelObject) -> tuple[ModelType, ModelObject]:
+def _hoisted(model: ModelType, defs: ModelObject) -> tuple[ModelType, ModelObject]: # REMOVE IT do we need that
     """Model without its own definitions, which join the ones already collected."""
     if not isinstance(model, dict) or not isinstance(model.get("$"), dict):
         return model, defs
@@ -739,7 +680,7 @@ def _hoisted(model: ModelType, defs: ModelObject) -> tuple[ModelType, ModelObjec
     return ({prop: sub for prop, sub in model.items() if prop != "$"},
             {**own, **defs})
 
-def _expanded(model: ModelType, name: str) -> ModelType:
+def _expanded(model: ModelType, name: str) -> ModelType: # STRANGE 
     """Model with the reference to the document root named, so a lift keeps its meaning."""
     if isinstance(model, str):
         return f"${name}" if model == _ROOT_REF else model
@@ -750,7 +691,7 @@ def _expanded(model: ModelType, name: str) -> ModelType:
     else:
         return model
 
-def _grounding(model: ModelType, defs: ModelObject, jm: JsonModel) -> tuple[ModelType, ModelObject]:
+def _grounding(model: ModelType, defs: ModelObject, jm: JsonModel) -> tuple[ModelType, ModelObject]: # STRANGE
     """Fragment and definitions with the document root held under a name of its own.
 
     A fragment lifted out of its document loses what its root reference meant,
@@ -765,7 +706,7 @@ def _grounding(model: ModelType, defs: ModelObject, jm: JsonModel) -> tuple[Mode
     defs[name] = _expanded(jm._model, name)
     return _expanded(model, name), defs
 
-def _carrying(model: ModelType, defs: ModelObject) -> ModelType:
+def _carrying(model: ModelType, defs: ModelObject) -> ModelType: # STRANGE CHECK IT IF I NEED IT
     """Model holding the definitions it needs, its own root left where it is.
 
     A document resolves its own references, through the definitions and the base
@@ -791,13 +732,13 @@ def _verify(value: Jsonable, model: ModelType, jm: JsonModel,
         if not (isinstance(model, dict) and set(model) & _ROOT_KEYS):
             model, defs = _hoisted(model, defs)
             model, defs = _grounding(model, defs, jm)
-            defs = {name: defs[name] for name in _needed(model, defs)}
+            defs = {name: defs[name] for name in _needed(model, defs)} # just put them all optimized have them all
         key = json.dumps([jm._url, _carrying(model, defs),
                           jm._loose_int, jm._loose_float], sort_keys=True)
     except (TypeError, ValueError):
         return None
-    if key not in _CHECKERS:
-        from .script import model_checker_from_json
+    if key not in _CHECKERS: # SIMPLIFIED
+        from .script import model_checker_from_json # verify just one do validator, validator done one time and we have funciton, cannot run validotor on submodel
         try:
             _CHECKERS[key] = model_checker_from_json(
                 json.loads(key)[1], resolver=jm._resolver,
@@ -813,7 +754,7 @@ def _verify(value: Jsonable, model: ModelType, jm: JsonModel,
         _CHECKERS[key] = None
         return None
 
-def _alone(models: ModelArray, jm: JsonModel, value: Jsonable) -> list[int]:
+def _alone(models: ModelArray, jm: JsonModel, value: Jsonable) -> list[int]: # DELETE IT WE DONT NEED IT WE SHOULDNT USE IT
     """Alternatives which do not refuse a value."""
     return [i for i, alt in enumerate(models) if _verify(value, alt, jm) is not False]
 
@@ -846,13 +787,13 @@ def _discriminating(models: ModelArray, jm: JsonModel, seen: frozenset[str]) -> 
     built: dict[int, Jsonable] = {}
     for index, alt in enumerate(models):
         try:
-            built[index] = simplest(alt, jm, seen)
-        except UnsupportedValue:
+            built[index] = simplest(alt, jm, seen) # we can see it in the end problem of the user
+        except UnsupportedValue: # we can check if they are equal 
             continue
     for index, value in built.items():
         if _alone(models, jm, value) == [index]:
             return [value]
-    for index, alt in enumerate(models):
+    for index, alt in enumerate(models): # remove verified
         for value in _nested(alt, jm, seen):
             if _alone(models, jm, value) == [index]:
                 return [value]
@@ -877,7 +818,7 @@ def _simplest_operator(op: str, alts: ModelArray, jm: JsonModel,
             value = simplest(alt, jm, seen)
         except UnsupportedValue:
             continue
-        result = _verify(value, {op: models}, jm)
+        result = _verify(value, {op: models}, jm) # remove verify don't bother
         if result is True:
             return value
         elif result is None and unchecked is None:
@@ -895,7 +836,7 @@ def _simplest_operator(op: str, alts: ModelArray, jm: JsonModel,
 def _simplest_object(model: ModelObject, jm: JsonModel, seen: frozenset[str]) -> Jsonable:
     """Simplest value for a simple object model or a bare target model."""
     props = {p: m for p, m in model.items() if not p.startswith("#")}
-    if set(props) == {"|"}:
+    if set(props) == {"|"}: # "|" in props everywhere 
         return _simplest_union(props["|"], jm, seen)
     elif set(props) == {"^"}:
         return _simplest_operator("^", props["^"], jm, seen)
@@ -909,9 +850,9 @@ def _simplest_object(model: ModelObject, jm: JsonModel, seen: frozenset[str]) ->
             return _simplest_constrained(props, jm, seen)
     value: dict[str, Jsonable] = {}
     for prop, submodel in props.items():
-        if prop in _OPERATORS:
+        if prop in _OPERATORS: # it can't happen we check it before
             raise UnsupportedValue(f"unsupported object operator: {prop}")
-        elif prop in _ROOT_KEYS:
+        elif prop in _ROOT_KEYS: # propably dead code, if not skip
             raise UnsupportedValue(f"unsupported definitions or imports: {prop}")
         elif prop == "" or prop.startswith(("?", "/", "$")):
             continue
@@ -938,7 +879,7 @@ def _simplest_string(model: str, jm: JsonModel, seen: frozenset[str]) -> Jsonabl
     else:
         return model
 
-def _property_name(prop: str, taken: set[str], outranking: list[str],
+def _property_name(prop: str, taken: set[str], outranking: list[str], # check it
                    jm: JsonModel|None = None) -> str:
     """Property name matching a pattern property, free of any other key of the object."""
     def usable(name: str) -> bool:
@@ -957,8 +898,8 @@ def _compile(model: ModelType, optimize: bool = True, resolver: Resolver|None = 
     """Check and preprocess a model given as plain JSON """
     try:
         jm = JsonModel(model, resolver or Resolver(), url=url)
-        nodes = sorted(jm._models.values(), key=lambda m: m._id)
-        for node in nodes:
+        nodes = sorted(jm._models.values(), key=lambda m: m._id) # why we are using that, modle could be a string
+        for node in nodes: # already done in script implemented process_model
             if not analyze.valid(node, extend=extend):
                 raise UnsupportedValue(f"unsupported model {node._url}:{node._id}")
         if optimize:
@@ -1004,7 +945,7 @@ def _violation_value(op: str, bound: Jsonable, props: ModelObject, base: Jsonabl
             raise UnsupportedValue(f"unsupported unique constraint: {bound}")
         lo, hi = _bounds(ops, 1, 0)
         lo = 2 if lo is None else max(lo, 2)
-        node, njm, nseen = _resolved(target, jm, seen)
+        node, njm, nseen = _resolved(target, jm, seen) # can we skip that 
         return _sized(node, base, int(_pick(lo, hi, ops, 1, 0)), False, njm, nseen)
     is_float = isinstance(base, float)
     table = _FLOAT_VIOLATIONS if is_float else _INT_VIOLATIONS
@@ -1020,11 +961,11 @@ def _violation_value(op: str, bound: Jsonable, props: ModelObject, base: Jsonabl
     elif candidate < 0:
         raise UnsupportedValue(f"no length violates {op} {bound}")
     else:
-        node, njm, nseen = _resolved(target, jm, seen)
+        node, njm, nseen = _resolved(target, jm, seen) # can we skip that 
         return _sized(node, base, candidate, ops.get("!") is True, njm, nseen)
 
 def _candidates(op: str, bound: Jsonable, props: ModelObject, base: Jsonable,
-                jm: JsonModel, seen: frozenset[str]):
+                jm: JsonModel, seen: frozenset[str]): # Check it 
     """Values which may break a constraint, best first."""
     try:
         yield _violation_value(op, bound, props, base, jm, seen)
@@ -1095,7 +1036,7 @@ def _bound_candidates(op: str, bound: Jsonable, props: ModelObject, base: Jsonab
             pass
 
 def _bounds_constrained(props: ModelObject, jm: JsonModel,
-                        seen: frozenset[str]) -> dict[str, Jsonable]:
+                        seen: frozenset[str]) -> dict[str, Jsonable]: # some verification are not useful already checked types remove it or assert
     """One value per constraint, each on the last step it still accepts."""
     target = props["@"]
     ops = {p: c for p, c in props.items() if p != "@"}
@@ -1228,7 +1169,7 @@ def _exclusive_sites(sites: list):
         if {p for p in node if not p.startswith("#")} == {"^"}:
             yield mpath, vpath, frames, node, disjunction, guarded
 
-def _jqpath(path: list) -> str:
+def _jqpath(path: list) -> str: # check if it is written in _path in runtime support
     """jq path expression for a path of object keys and array indexes."""
     if not path:
         return "."
@@ -1417,15 +1358,15 @@ def violations(model: ModelType, jm: JsonModel|None = None,
                url: str = "", extend: bool = False,
                marks: set[str]|None = None) -> dict[str, Jsonable]:
     """Generate a value breaking one constraint, type or property of a model."""
-    return _violations(model, jm, seen, resolver, url, extend, marks)[0]
+    return _violations(model, jm, seen, resolver, url, extend, marks)[0] # maybe make sense
 
 
-def _violations(model: ModelType, jm: JsonModel|None = None,
+def _violations(model: ModelType, jm: JsonModel|None = None, # put some comments main algorithm 
                 seen: frozenset[str] = frozenset(), resolver: Resolver|None = None,
                 url: str = "", extend: bool = False,
                 marks: set[str]|None = None,
                 valid: frozenset[str] = frozenset()
-                ) -> tuple[dict[str, Jsonable], list[str], list[str], list[str]]:
+                ) -> tuple[dict[str, Jsonable], list[str], list[str], list[str]]: # more docs
     """Generate a value breaking each constraint, and which sites were skipped, repeated or lost.
 
     Values already generated as valid, as JSON dumps, are known to match the model.
@@ -1742,7 +1683,7 @@ def optionals(model: ModelType, jm: JsonModel|None = None,
                 continue
             try:
                 sub = {**built, name: simplest(submodel, jm, seen)}
-                found = _validated(sub, vpath, frames, doc, jm, seen, taken, key, marks)
+                found = _validated(sub, vpath, frames, doc, jm, seen, taken, key, marks) # remove validatoin maybe ( check it )
             except Vacuous:
                 continue
             except UnsupportedValue as e:
