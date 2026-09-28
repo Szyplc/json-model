@@ -37,8 +37,6 @@ _NO_NAME_PREDEFS = {
 _OPERATORS = {"@", "|", "&", "^", "!", "=", "!=", "<", "<=", ">", ">="}
 _QUOTED_OPS = _OPERATORS - {"@"}
 _ROOT_KEYS = {"$", "%", "~"}
-_ROOT_REF = "$#"
-_ROOT_NAME = "Root"
 _COMPARISONS = {"=", "!=", "<", "<=", ">", ">="}
 _CONSTRAINTS = _COMPARISONS | {"!"}
 _INT_VIOLATIONS = {
@@ -588,185 +586,23 @@ def _simplest_union(alts: ModelArray, jm: JsonModel, seen: frozenset[str]) -> Js
                 pass
     raise UnsupportedValue(f"no alternative yields a value: {alts}")
 
-_CHECKERS: dict[str, EntryCheckFun|None] = {}
-
-def _defs(jm: JsonModel) -> ModelObject: # check if it is already in jm ( check if we need that )
-    """Definitions of a model, by name."""
-    base = jm._url.split("#")[0]
-    return {name: ("$" + node._url if node._url.split("#")[0] != base else node._model)
-            for name, node in jm._defs._syms.items()}
-
-def _needed(model: ModelType, defs: ModelObject) -> set[str]: # terible function check it or REMOVE IT
-    """Definition names a model may reference."""
-    keep: set[str] = set()
-    pending = [model]
-    while pending:
-        text = json.dumps(pending.pop())
-        for name in defs:
-            if name not in keep and "$" + name in text:
-                keep.add(name)
-                pending.append(defs[name])
-    return keep
-
-def _hoisted(model: ModelType, defs: ModelObject) -> tuple[ModelType, ModelObject]: # REMOVE IT do we need that
-    """Model without its own definitions, which join the ones already collected."""
-    if not isinstance(model, dict) or not isinstance(model.get("$"), dict):
-        return model, defs
-    own = {name: sub for name, sub in model["$"].items() if name != ""}
-    return ({prop: sub for prop, sub in model.items() if prop != "$"},
-            {**own, **defs})
-
-def _expanded(model: ModelType, name: str) -> ModelType: # STRANGE 
-    """Model with the reference to the document root named, so a lift keeps its meaning."""
-    if isinstance(model, str):
-        return f"${name}" if model == _ROOT_REF else model
-    elif isinstance(model, list):
-        return [_expanded(m, name) for m in model]
-    elif isinstance(model, dict):
-        return {prop: _expanded(sub, name) for prop, sub in model.items()}
-    else:
-        return model
-
-def _grounding(model: ModelType, defs: ModelObject, jm: JsonModel) -> tuple[ModelType, ModelObject]: # STRANGE
-    """Fragment and definitions with the document root held under a name of its own.
-
-    A fragment lifted out of its document loses what its root reference meant,
-    which the root model itself restores when it is given a name to answer to.
-    """
-    if _ROOT_REF not in json.dumps([model, defs]):
-        return model, defs
-    name = _ROOT_NAME
-    while name in defs:
-        name += "0"
-    defs = {sym: _expanded(sub, name) for sym, sub in defs.items()}
-    defs[name] = _expanded(jm._model, name)
-    return _expanded(model, name), defs
-
-def _carrying(model: ModelType, defs: ModelObject) -> ModelType: # STRANGE CHECK IT IF I NEED IT
-    """Model holding the definitions it needs, its own root left where it is.
-
-    A document resolves its own references, through the definitions and the base
-    it carries, so it is checked as it stands. A fragment carries none of that:
-    it becomes the target of a model which holds the definitions it needs, unless
-    its own root keys make it something no target may hold.
-    """
-    if isinstance(model, dict) and set(model) & _ROOT_KEYS:
-        return model
-    elif not defs:
-        return model
-    elif isinstance(model, dict) and set(model) & (_OPERATORS | {"+"}):
-        return {**model, "$": defs}
-    else:
-        return {"$": defs, "@": model}
-
-def _verify(value: Jsonable, model: ModelType, jm: JsonModel,
-            defs: ModelObject|None = None) -> bool|None:
-    """Whether a value matches a model, None when no checker can be built."""
-    try:
-        if defs is None:
-            defs = _defs(jm)
-        if not (isinstance(model, dict) and set(model) & _ROOT_KEYS):
-            model, defs = _hoisted(model, defs)
-            model, defs = _grounding(model, defs, jm)
-            defs = {name: defs[name] for name in _needed(model, defs)} # just put them all optimized have them all
-        key = json.dumps([jm._url, _carrying(model, defs),
-                          jm._loose_int, jm._loose_float], sort_keys=True)
-    except (TypeError, ValueError):
-        return None
-    if key not in _CHECKERS: # SIMPLIFIED
-        from .script import model_checker_from_json # verify just one do validator, validator done one time and we have funciton, cannot run validotor on submodel
-        try:
-            _CHECKERS[key] = model_checker_from_json(
-                json.loads(key)[1], resolver=jm._resolver,
-                loose_int=jm._loose_int, loose_float=jm._loose_float)
-        except Exception:
-            _CHECKERS[key] = None
-    check = _CHECKERS[key]
-    if check is None:
-        return None
-    try:
-        return check(value, "", None)
-    except RecursionError:
-        _CHECKERS[key] = None
-        return None
-
-def _alone(models: ModelArray, jm: JsonModel, value: Jsonable) -> list[int]: # DELETE IT WE DONT NEED IT WE SHOULDNT USE IT
-    """Alternatives which do not refuse a value."""
-    return [i for i, alt in enumerate(models) if _verify(value, alt, jm) is not False]
-
-def _nested(model: ModelType, jm: JsonModel, seen: frozenset[str]) -> list[Jsonable]:
-    """Values the alternatives of a union nested inside an alternative build."""
-    props = ({p: m for p, m in model.items() if not p.startswith("#")}
-             if isinstance(model, dict) else {})
-    if set(props) not in ({"|"}, {"^"}):
-        return []
-    values: list[Jsonable] = []
-    for alt in props[next(iter(props))]:
+def _simplest_operator(op: str, alts: ModelArray, jm: JsonModel,
+                       seen: frozenset[str]) -> Jsonable:
+    """Simplest value of the first alternative which yields one, for a xor one no other builds."""
+    built: list[Jsonable] = []
+    for alt in alts:
         if isinstance(alt, str) and alt.startswith("#"):
             continue
         try:
-            values.append(simplest(alt, jm, seen))
+            built.append(simplest(alt, jm, seen))
         except UnsupportedValue:
             continue
-    return values
-
-def _discriminating(models: ModelArray, jm: JsonModel, seen: frozenset[str]) -> list[Jsonable]:
-    """Value which exactly one alternative of a xor accepts, empty when none is found.
-
-    A value an alternative builds and every other one certainly rejects is proven,
-    since construction shows the acceptance no oracle can. An alternative which is
-    itself a union is asked for the values of its own branches, since the simplest
-    of them may be the one the other alternatives share. A value borrowed from
-    another alternative's violations is only a better guess: it leaves one branch
-    open instead of several, and the last pass notes it if the compiler disagrees.
-    """
-    built: dict[int, Jsonable] = {}
-    for index, alt in enumerate(models):
-        try:
-            built[index] = simplest(alt, jm, seen) # we can see it in the end problem of the user
-        except UnsupportedValue: # we can check if they are equal 
-            continue
-    for index, value in built.items():
-        if _alone(models, jm, value) == [index]:
-            return [value]
-    for index, alt in enumerate(models): # remove verified
-        for value in _nested(alt, jm, seen):
-            if _alone(models, jm, value) == [index]:
-                return [value]
-    for index, alt in enumerate(models):
-        try:
-            found = violations(alt, jm, seen)
-        except (UnsupportedValue, Vacuous):
-            continue
-        for value in found.values():
-            open_branches = _alone(models, jm, value)
-            if len(open_branches) == 1 and open_branches[0] != index:
-                return [value]
-    return []
-
-def _simplest_operator(op: str, alts: ModelArray, jm: JsonModel,
-                       seen: frozenset[str]) -> Jsonable:
-    """Simplest value satisfying an operator, checked against the whole model."""
-    models = [a for a in alts if not (isinstance(a, str) and a.startswith("#"))]
-    unchecked, refused = None, None
-    for alt in models:
-        try:
-            value = simplest(alt, jm, seen)
-        except UnsupportedValue:
-            continue
-        result = _verify(value, {op: models}, jm) # remove verify don't bother
-        if result is True:
+    keys = [_value_key(value) for value in built]
+    for value, key in zip(built, keys):
+        if op != "^" or keys.count(key) == 1:
             return value
-        elif result is None and unchecked is None:
-            unchecked = [value]
-        elif result is False and refused is None:
-            refused = [value]
-    if op == "^":
-        for found in _discriminating(models, jm, seen):
-            return found
-    for fallback in (unchecked, refused):
-        if fallback is not None:
-            return fallback[0]
+    if built:
+        return built[0]
     raise UnsupportedValue(f"no alternative satisfies {op}: {alts}")
 
 def _simplest_object(model: ModelObject, jm: JsonModel, seen: frozenset[str]) -> Jsonable:
@@ -909,7 +745,7 @@ def _candidates(op: str, bound: Jsonable, props: ModelObject, base: Jsonable,
 
 def _violations_constrained(props: ModelObject, jm: JsonModel,
                             seen: frozenset[str]) -> dict[str, Jsonable]:
-    """One value per size constraint, each breaking only that constraint."""
+    """One value per constraint, meant to break only that one."""
     target = props["@"]
     ops = {p: c for p, c in props.items() if p != "@"}
     if any(isinstance(c, str) for p, c in ops.items() if p in _COMPARISONS):
@@ -921,11 +757,7 @@ def _violations_constrained(props: ModelObject, jm: JsonModel,
         raise UnsupportedValue(f"unique constraint on a non-array: {target}")
     values: dict[str, Jsonable] = {}
     for op, bound in ops.items():
-        rest = {p: m for p, m in props.items() if p != op}
-        for value in _candidates(op, bound, props, base, jm, seen):
-            if _verify(value, props, jm) is False and _verify(value, rest, jm) is True:
-                values[op] = value
-                break
+        values[op] = next(_candidates(op, bound, props, base, jm, seen))
     if not values:
         raise UnsupportedValue(f"no constraint could be violated: {props}")
     else:
@@ -978,9 +810,8 @@ def _bounds_constrained(props: ModelObject, jm: JsonModel,
     values: dict[str, Jsonable] = {}
     for op, bound in ops.items():
         for value in _bound_candidates(op, bound, props, base, jm, seen):
-            if _verify(value, props, jm) is True:
-                values[op] = value
-                break
+            values[op] = value
+            break
     if not values:
         raise UnsupportedValue(
             f"no bound reached for {', '.join(ops)} in model: {_brief(target)}")
@@ -1291,17 +1122,14 @@ def _violations(model: ModelType, jm: JsonModel|None = None, # put some comments
 
     Values already generated as valid, as JSON dumps, are known to match the model.
     """
-    vjm, vmodel = jm, model
     skipped: list[str] = []
     doubled: list[str] = []
     failed: list[str] = []
     if jm is None:
         jm, model = _compile(model, False, resolver, url, extend)
-        vjm, vmodel = _compile(vmodel, True, resolver, url, extend)
     sites = list(_sites(model, [], [], [], jm, frozenset(), skipped))
-    defs = _defs(jm)
     if not sites:
-        if all(_verify(v, model, jm, defs) is True for v in _TYPE_VIOLATIONS):
+        if skipped:
             raise Vacuous(f"every value matches the model: {_brief(model)}")
         raise UnsupportedValue(f"cannot enter model: {_brief(model)}")
     values: dict[str, Jsonable] = {}
@@ -1495,19 +1323,14 @@ def _violations(model: ModelType, jm: JsonModel|None = None, # put some comments
         proposed(key)
         taken.add(dumped)
         values[key] = value
-    vdefs = _defs(vjm)
-    vraw = vjm._init_md if vmodel is vjm._model else vmodel
     for candidate in _ROOT_TYPES:
         dumped = _value_key(candidate)
-        shown = f"'{candidate}'" if isinstance(candidate, str) else dumped
+        key = _rooted(candidate)
         if dumped in taken:
-            doubles(_rooted(candidate))
+            doubles(key)
             continue
-        if _verify(candidate, vraw, vjm, vdefs) is not False:
-            if dumped in valid:
-                skip(f".{shown} root: valid for the model")
-            continue
-        values[_rooted(candidate)] = copy.deepcopy(candidate)
+        proposed(key)
+        values[key] = copy.deepcopy(candidate)
         taken.add(dumped)
     if not values:
         if not reasons:
@@ -1527,8 +1350,9 @@ def bounds(model: ModelType, jm: JsonModel|None = None,
     marks = set() if marks is None else marks
     if jm is None:
         jm, model = _compile(model, False, resolver, url, extend)
-    sites = list(_sites(model, [], [], [], jm, frozenset()))
-    if not sites and not all(_verify(v, model, jm) is True for v in _TYPE_VIOLATIONS):
+    notes: list[str] = []
+    sites = list(_sites(model, [], [], [], jm, frozenset(), notes))
+    if not sites and not notes:
         raise UnsupportedValue(f"cannot enter model: {_brief(model)}")
     values: dict[str, Jsonable] = {}
     reasons: list[str] = []
@@ -1731,6 +1555,7 @@ _EXPLANATIONS = (" root invalid", " root", " bound", " present", " branch", " it
                  " invalid", " missing", " extra", " bad", " overlap")
 
 _ROOT_INVALID = " root invalid"
+_ROOT_GUESS = f"# .{_ROOT_INVALID}"
 
 def _rooted(value: Jsonable) -> str:
     """Key of a root type violation, naming the value it is about."""
@@ -1774,9 +1599,21 @@ _PASSED = "BAD PASS"
 _FAILED = "BAD FAIL"
 _NO_BASE = "no value the compiler accepts, every vector below builds on this one"
 
+def _checker(model: ModelType, jm: JsonModel) -> EntryCheckFun|None:
+    """Checker of the whole model, None when it cannot be built."""
+    from .script import model_checker_from_json
+    try:
+        return model_checker_from_json(copy.deepcopy(model), resolver=jm._resolver,
+                                       loose_int=jm._loose_int, loose_float=jm._loose_float)
+    except Exception:
+        return None
+
 def _recheck(entries: list[tuple[int, str, list]], model: ModelType,
              resolver: Resolver|None, url: str, extend: bool) -> None:
-    """Settle every unproven mark against the oracles, null only for what none settles."""
+    """Settle every mark against one checker of the whole model, null where it disagrees.
+
+    A root value of another type is only a guess, dropped when the checker takes it.
+    """
     judged = [entry for *_, entry in entries
               if len(entry) == 2 and isinstance(entry[0], str)]
     if not judged:
@@ -1794,11 +1631,18 @@ def _recheck(entries: list[tuple[int, str, list]], model: ModelType,
         del entry[1]
     try:
         jm, _ = _compile(model, True, resolver, url, extend)
-        defs = _defs(jm)
+        check = _checker(model, jm)
     except UnsupportedValue:
-        jm, defs = None, None
-    results = [None if jm is None else _verify(entry[1][1], model, jm, defs)
-               for entry in judged]
+        check = None
+    def verdict(value: Jsonable) -> bool|None:
+        """What the checker says of a value, None without one."""
+        if check is None:
+            return None
+        try:
+            return check(value, "", None)
+        except RecursionError:
+            return None
+    results = [verdict(entry[1][1]) for entry in judged]
     def settled(index: int, entry: list) -> bool:
         """Whether the file may state the verdict of a vector as it stands."""
         if entry[0].endswith(_AGREES):
@@ -1807,9 +1651,13 @@ def _recheck(entries: list[tuple[int, str, list]], model: ModelType,
     stated = {_value_key(entry[1][1])
               for index, entry in enumerate(judged) if settled(index, entry)}
     refused = False
+    dropped: set[int] = set()
     for index, entry in enumerate(judged):
         expect, value = entry[1]
         result = results[index]
+        if entry[0].startswith(_ROOT_GUESS) and result is not False:
+            dropped.add(id(entry))
+            continue
         if result is False and entry[0].startswith(_SIMPLEST):
             refused = True
         dumped = _value_key(value)
@@ -1827,6 +1675,7 @@ def _recheck(entries: list[tuple[int, str, list]], model: ModelType,
             cleared(entry)
             entry[1][0] = expect
             stated.add(dumped)
+    entries[:] = [e for e in entries if id(e[2]) not in dropped]
     if refused:
         entries.append((0, ".", _note(f"base values: {_NO_BASE}", "FAILED")[1]))
 
