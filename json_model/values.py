@@ -374,7 +374,7 @@ def _holding(target: ModelArray, item: ModelType, ops: ModelObject,
         length = int(_pick(lo, hi, ops, 1, 1))
     except UnsupportedValue:
         return None
-    if ops.get("!") is True:
+    if "!" in ops:
         return _sized(target, [], length, True, jm, seen)
     else:
         return [_filled(item, jm, seen) for _ in range(length)]
@@ -698,7 +698,7 @@ def _violation_value(op: str, bound: Jsonable, props: ModelObject, base: Jsonabl
     elif candidate < 0:
         raise UnsupportedValue(f"no length violates {op} {bound}")
     else:
-        return _sized(target, base, candidate, ops.get("!") is True, jm, seen)
+        return _sized(target, base, candidate, "!" in ops, jm, seen)
 
 def _violations_constrained(props: ModelObject, jm: JsonModel,
                             seen: frozenset[str]) -> dict[str, Jsonable]:
@@ -710,7 +710,7 @@ def _violations_constrained(props: ModelObject, jm: JsonModel,
     base = simplest(target, jm, seen)
     if isinstance(base, bool) or not isinstance(base, (int, float, str, list, dict)):
         raise UnsupportedValue(f"unsupported constrained model: {target}")
-    elif ops.get("!") is True and not isinstance(base, list):
+    elif "!" in ops and not isinstance(base, list):
         raise UnsupportedValue(f"unique constraint on a non-array: {target}")
     values: dict[str, Jsonable] = {}
     for op, bound in ops.items():
@@ -737,7 +737,7 @@ def _bound_value(table: dict, op: str, bound: Jsonable, props: ModelObject,
     if isinstance(base, dict):
         return _grown(target, base, candidate, jm, seen)
     else:
-        return _sized(target, base, candidate, ops.get("!") is True, jm, seen)
+        return _sized(target, base, candidate, "!" in ops, jm, seen)
 
 def _bound_candidates(op: str, bound: Jsonable, props: ModelObject, base: Jsonable,
                       jm: JsonModel, seen: frozenset[str]):
