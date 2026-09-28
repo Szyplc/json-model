@@ -15,10 +15,9 @@ from .predefs import MODEL_PREDEFS, PREDEFS, PREDEF_RE, STR_MODEL_PREDEFS
 from .python import PYTHON_RUNTIME_PREDEFS
 from .runtime import support
 from .runtime.types import EntryCheckFun
+from .utils import cst
 
-_NUMBER_RE = re.compile(r"^=-?\d+(\.\d+)?([Ee][-+]?\d+)?$")
 _MODEL_NAME_RE = re.compile(r"^[^\s\[\]'\"]+$")
-_CONSTANTS = {"=null": None, "=true": True, "=false": False}
 _CATEGORIES = {
     _parser.CATEGORY_DIGIT: "0",
     _parser.CATEGORY_WORD: "a",
@@ -128,14 +127,6 @@ def _simplest_scalar(model: ModelType) -> JsonScalar:
             return _PI if model == 1.0 else -_PI
         case _:
             assert False, f"not a scalar model: {model}"
-
-def _simplest_constant(model: str) -> JsonScalar:
-    """Simplest value for a scalar constant model."""
-    if model in _CONSTANTS:
-        return _CONSTANTS[model]
-    assert _NUMBER_RE.match(model), f"invalid scalar constant model: {model}"
-    number = model[1:]
-    return float(number) if any(c in number for c in ".eE") else int(number)
 
 def _regex_char(item) -> str:
     """Simplest character for a regex character class item."""
@@ -613,10 +604,8 @@ def _simplest_string(model: str, jm: JsonModel, seen: frozenset[str]) -> Jsonabl
     """Simplest value for a string model."""
     if model == "":
         return ""
-    elif model.startswith("_"):
-        return model[1:]
-    elif model.startswith("="):
-        return _simplest_constant(model)
+    elif model.startswith(("_", "=")):
+        return cst(model)
     elif model.startswith("/"):
         return _simplest_regex(model)
     elif model.startswith("$"):
