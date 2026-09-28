@@ -10,8 +10,7 @@ import re._parser as _parser
 from .mtypes import ModelType, ModelArray, ModelObject, Jsonable, JsonScalar, ModelError
 from .model import JsonModel
 from .resolver import Resolver
-from .objops import merge
-from . import analyze, optim
+from . import analyze
 from .predefs import MODEL_PREDEFS, PREDEFS, PREDEF_RE, STR_MODEL_PREDEFS
 from .python import PYTHON_RUNTIME_PREDEFS
 from .runtime import support
@@ -662,37 +661,8 @@ def _property_name(prop: str, taken: set[str], outranking: list[str], # check it
             return name + suffix
     raise UnsupportedValue(f"no free property name for {prop}")
 
-def _compile(model: ModelType, optimize: bool = True, resolver: Resolver|None = None,
-             url: str = "", extend: bool = False) -> tuple[JsonModel, ModelType]:
-    """Check and preprocess a model given as plain JSON """
-    try:
-        jm = JsonModel(model, resolver or Resolver(), url=url)
-        nodes = sorted(jm._models.values(), key=lambda m: m._id) # why we are using that, modle could be a string
-        for node in nodes: # already done in script implemented process_model
-            if not analyze.valid(node, extend=extend):
-                raise UnsupportedValue(f"unsupported model {node._url}:{node._id}")
-        if optimize:
-            for node in nodes:
-                optim.optimize(node)
-        for node in reversed(nodes):
-            merge(node)
-        if optimize:
-            for node in nodes:
-                optim.optimize(node)
-    except (ModelError, AssertionError, KeyError) as e:
-        msg = str(e)
-        if msg:
-            raise UnsupportedValue(f"unsupported model: {msg}")
-        else:
-            raise UnsupportedValue("unsupported model")
-    return jm, jm._model
-
-def simplest(model: ModelType, jm: JsonModel|None = None,
-             seen: frozenset[str] = frozenset(), resolver: Resolver|None = None,
-             url: str = "", extend: bool = False) -> Jsonable:
+def simplest(model: ModelType, jm: JsonModel, seen: frozenset[str] = frozenset()) -> Jsonable:
     """Generate the simplest value matching a model."""
-    if jm is None:
-        jm, model = _compile(model, True, resolver, url, extend)
     match model:
         case None | bool() | int() | float():
             return _simplest_scalar(model)
@@ -1101,17 +1071,8 @@ def _validated(sub: Jsonable, vpath: list, frames: list, doc: Jsonable,
         return fallback
     return []
 
-def violations(model: ModelType, jm: JsonModel|None = None,
-               seen: frozenset[str] = frozenset(), resolver: Resolver|None = None,
-               url: str = "", extend: bool = False,
-               marks: set[str]|None = None) -> dict[str, Jsonable]:
-    """Generate a value breaking one constraint, type or property of a model."""
-    return _violations(model, jm, seen, resolver, url, extend, marks)[0] # maybe make sense
-
-
-def _violations(model: ModelType, jm: JsonModel|None = None, # put some comments main algorithm 
-                seen: frozenset[str] = frozenset(), resolver: Resolver|None = None,
-                url: str = "", extend: bool = False,
+def _violations(model: ModelType, jm: JsonModel, # put some comments main algorithm
+                seen: frozenset[str] = frozenset(),
                 marks: set[str]|None = None,
                 valid: frozenset[str] = frozenset()
                 ) -> tuple[dict[str, Jsonable], list[str], list[str], list[str]]: # more docs
@@ -1122,8 +1083,6 @@ def _violations(model: ModelType, jm: JsonModel|None = None, # put some comments
     skipped: list[str] = []
     doubled: list[str] = []
     failed: list[str] = []
-    if jm is None:
-        jm, model = _compile(model, True, resolver, url, extend)
     sites = list(_sites(model, [], [], [], jm, frozenset(), skipped))
     if not sites:
         if skipped:
@@ -1339,14 +1298,10 @@ def _violations(model: ModelType, jm: JsonModel|None = None, # put some comments
         return (values, skipped, doubled,
                 [n for n in failed if n.partition(": ")[0] not in covered])
 
-def bounds(model: ModelType, jm: JsonModel|None = None,
-           seen: frozenset[str] = frozenset(), resolver: Resolver|None = None,
-           url: str = "", extend: bool = False,
+def bounds(model: ModelType, jm: JsonModel, seen: frozenset[str] = frozenset(),
            marks: set[str]|None = None) -> dict[str, Jsonable]:
     """Generate a value on the bound of each constraint of a model."""
     marks = set() if marks is None else marks
-    if jm is None:
-        jm, model = _compile(model, True, resolver, url, extend)
     notes: list[str] = []
     sites = list(_sites(model, [], [], [], jm, frozenset(), notes))
     if not sites and not notes:
@@ -1386,15 +1341,11 @@ def bounds(model: ModelType, jm: JsonModel|None = None,
     else:
         return values
 
-def optionals(model: ModelType, jm: JsonModel|None = None,
-              seen: frozenset[str] = frozenset(), resolver: Resolver|None = None,
-              url: str = "", extend: bool = False,
+def optionals(model: ModelType, jm: JsonModel, seen: frozenset[str] = frozenset(),
               marks: set[str]|None = None
               ) -> tuple[dict[str, Jsonable], list[str], list[str]]:
     """Generate a valid value per optional property, why the others were skipped or repeated."""
     marks = set() if marks is None else marks
-    if jm is None:
-        jm, model = _compile(model, True, resolver, url, extend)
     sites = list(_sites(model, [], [], [], jm, frozenset()))
     values: dict[str, Jsonable] = {}
     reasons: list[str] = []
@@ -1444,15 +1395,11 @@ def optionals(model: ModelType, jm: JsonModel|None = None,
         raise Vacuous(f"no optional property in model: {_brief(model)}")
     return values, reasons, doubled
 
-def branches(model: ModelType, jm: JsonModel|None = None,
-             seen: frozenset[str] = frozenset(), resolver: Resolver|None = None,
-             url: str = "", extend: bool = False,
+def branches(model: ModelType, jm: JsonModel, seen: frozenset[str] = frozenset(),
              marks: set[str]|None = None
              ) -> tuple[dict[str, Jsonable], list[str], list[str]]:
     """Generate a valid value per union alternative, why the others were skipped or repeated."""
     marks = set() if marks is None else marks
-    if jm is None:
-        jm, model = _compile(model, True, resolver, url, extend)
     sites = list(_sites(model, [], [], [], jm, frozenset()))
     values: dict[str, Jsonable] = {}
     reasons: list[str] = []
@@ -1499,15 +1446,11 @@ def _guarding(guarded: tuple, vpath: list) -> ModelObject:
     return {p: c for vp, ops in guarded[1] if vp == vpath for p, c in ops.items()
             if p == "!" or (not isinstance(c, bool) and isinstance(c, (int, float)))}
 
-def items(model: ModelType, jm: JsonModel|None = None,
-          seen: frozenset[str] = frozenset(), resolver: Resolver|None = None,
-          url: str = "", extend: bool = False,
+def items(model: ModelType, jm: JsonModel, seen: frozenset[str] = frozenset(),
           marks: set[str]|None = None
           ) -> tuple[dict[str, Jsonable], list[str], list[str]]:
     """Generate a valid value per array model, holding an item, why the others were skipped."""
     marks = set() if marks is None else marks
-    if jm is None:
-        jm, model = _compile(model, True, resolver, url, extend)
     sites = list(_sites(model, [], [], [], jm, frozenset()))
     values: dict[str, Jsonable] = {}
     reasons: list[str] = []
@@ -1596,17 +1539,15 @@ _PASSED = "BAD PASS"
 _FAILED = "BAD FAIL"
 _NO_BASE = "no value the compiler accepts, every vector below builds on this one"
 
-def _checker(model: ModelType, jm: JsonModel) -> EntryCheckFun|None:
+def _checker(jm: JsonModel) -> EntryCheckFun|None:
     """Checker of the whole model, None when it cannot be built."""
-    from .script import model_checker_from_json
+    from .script import model_checker
     try:
-        return model_checker_from_json(copy.deepcopy(model), resolver=jm._resolver,
-                                       loose_int=jm._loose_int, loose_float=jm._loose_float)
+        return model_checker(jm)
     except Exception:
         return None
 
-def _recheck(entries: list[tuple[int, str, list]], model: ModelType,
-             resolver: Resolver|None, url: str, extend: bool) -> None:
+def _recheck(entries: list[tuple[int, str, list]], jm: JsonModel) -> None:
     """Settle every mark against one checker of the whole model, null where it disagrees.
 
     A root value of another type is only a guess, dropped when the checker takes it.
@@ -1626,11 +1567,7 @@ def _recheck(entries: list[tuple[int, str, list]], model: ModelType,
         """Shrink a vector which adds nothing to the comment which says why."""
         remark(entry, verdict)
         del entry[1]
-    try:
-        jm, _ = _compile(model, True, resolver, url, extend)
-        check = _checker(model, jm)
-    except UnsupportedValue:
-        check = None
+    check = _checker(jm)
     def verdict(value: Jsonable) -> bool|None:
         """What the checker says of a value, None without one."""
         if check is None:
@@ -1682,10 +1619,12 @@ def vectors(model: ModelType, resolver: Resolver|None = None, url: str = "",
     entries: list[tuple[int, str, list]] = []
     reasons: list[str] = []
     taken: set[str] = set()
+    from .script import model_from_json
     try:
-        jm, compiled = _compile(model, True, resolver, url, extend)
-    except UnsupportedValue as e:
-        raise UnsupportedValue(f"no test vector: {e}")
+        jm = model_from_json(model, murl=url, resolver=resolver, extend=extend)
+    except (ModelError, AssertionError, KeyError) as e:
+        raise UnsupportedValue(f"no test vector: unsupported model: {e}")
+    compiled = jm._model
     try:
         valid = simplest(compiled, jm)
         entries.append((0, ".", ["# . simplest", [True, valid]]))
@@ -1751,5 +1690,5 @@ def vectors(model: ModelType, resolver: Resolver|None = None, url: str = "",
         entries.append((1, ".", _note(f"violation values: {e}", "FAILED")[1]))
     if not any(len(entry) > 1 for *_, entry in entries):
         raise UnsupportedValue(f"no test vector: {_joined(reasons)}")
-    _recheck(entries, model, resolver, url, extend)
+    _recheck(entries, jm)
     return _ordered(entries)
