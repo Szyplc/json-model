@@ -16,7 +16,7 @@ from .predefs import (MODEL_PREDEFS, PREDEFS, PREDEF_RE, STR_MODEL_PREDEFS,
 from .python import PYTHON_RUNTIME_PREDEFS
 from .runtime import support
 from .runtime.types import EntryCheckFun
-from .utils import cst
+from .utils import cst, is_a_simple_object
 
 _MODEL_NAME_RE = re.compile(r"^[^\s\[\]'\"]+$")
 _CATEGORIES = {
@@ -31,7 +31,6 @@ _ANY_NAME_PREDEFS = {"$ANY", "$STRING"}
 _NO_NAME_PREDEFS = {"$NULL", "$NONE"} | BOOL_MODEL_PREDEFS | INT_MODEL_PREDEFS | FLOAT_MODEL_PREDEFS
 _OPERATORS = {"@", "|", "&", "^", "!", "=", "!=", "<", "<=", ">", ">="}
 _QUOTED_OPS = _OPERATORS - {"@"}
-_ROOT_KEYS = {"$", "%", "~"}
 _COMPARISONS = {"=", "!=", "<", "<=", ">", ">="}
 _CONSTRAINTS = _COMPARISONS | {"!"}
 _INT_VIOLATIONS = {
@@ -490,7 +489,7 @@ def _grown(target: ModelType, base: ModelObject, length: int,
     if jm._isRef(target):
         jm = jm.resolveRef(target, [])
         target = jm._model
-    if not isinstance(target, dict) or set(target) & (_OPERATORS | _ROOT_KEYS):
+    if not is_a_simple_object(target):
         raise UnsupportedValue(f"cannot resize object model: {target}")
     elif len(base) > length:
         raise UnsupportedValue(f"cannot shrink object model: {target}")
@@ -767,7 +766,7 @@ def _object_sites(sites: list):
     for mpath, vpath, frames, props, disjunction, guarded in sites:
         node = props["@"]
         if (not set(props) - {"@"} and isinstance(node, dict)
-                and not set(node) & (_OPERATORS | _ROOT_KEYS)):
+                and is_a_simple_object(node)):
             yield mpath, vpath, frames, node, disjunction, guarded
 
 def _array_sites(sites: list):
@@ -902,7 +901,7 @@ def _sites(model: ModelType, mpath: list, vpath: list, frames: list,
                 yield from _sites(alt, mpath + [op, index], vpath,
                                   frames + [(vpath, alt)], jm, seen, notes, inner,
                                   (guarded[0] or op != "|", guarded[1]))
-        elif not set(props) & (_OPERATORS | _ROOT_KEYS):
+        elif is_a_simple_object(props):
             yield mpath, vpath, frames, {"@": model}, disjunction, guarded
             named = {p[1:] if p.startswith(("!", "?", "_")) else p
                      for p in props if p and not p.startswith(("/", "$"))}
