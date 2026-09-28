@@ -549,7 +549,7 @@ def _simplest_constrained(props: ModelObject, jm: JsonModel, seen: frozenset[str
     if any(isinstance(c, bool) or not isinstance(c, (int, float))
            for p, c in ops.items() if p in _COMPARISONS):
         raise UnsupportedValue(f"unsupported comparison constraint: {ops}")
-    unique = ops.get("!") is True # unique never is False optimizer will remove it
+    unique = "!" in ops
     base = simplest(target, jm, seen)
     if base is None or isinstance(base, bool): # make assert from if
         raise UnsupportedValue(f"unsupported constrained model: {target}") # {"@": true, "=": false} take this example, generator assume that type have sense, so we assume that compiler check it
@@ -1123,7 +1123,7 @@ def _violations(model: ModelType, jm: JsonModel|None = None, # put some comments
     doubled: list[str] = []
     failed: list[str] = []
     if jm is None:
-        jm, model = _compile(model, False, resolver, url, extend)
+        jm, model = _compile(model, True, resolver, url, extend)
     sites = list(_sites(model, [], [], [], jm, frozenset(), skipped))
     if not sites:
         if skipped:
@@ -1346,7 +1346,7 @@ def bounds(model: ModelType, jm: JsonModel|None = None,
     """Generate a value on the bound of each constraint of a model."""
     marks = set() if marks is None else marks
     if jm is None:
-        jm, model = _compile(model, False, resolver, url, extend)
+        jm, model = _compile(model, True, resolver, url, extend)
     notes: list[str] = []
     sites = list(_sites(model, [], [], [], jm, frozenset(), notes))
     if not sites and not notes:
