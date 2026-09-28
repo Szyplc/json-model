@@ -988,43 +988,6 @@ def _document(sub: Jsonable, vpath: list, frames: list, doc: Jsonable,
     else:
         return _replaced(doc, path, value)
 
-def _at(doc: Jsonable, path: list) -> Jsonable:
-    """Value held at a path in a document, None when there is none."""
-    node = doc
-    for step in path:
-        if isinstance(node, dict) and step in node:
-            node = node[step]
-        elif isinstance(node, list) and isinstance(step, int) and 0 <= step < len(node):
-            node = node[step]
-        else:
-            return None
-    return node
-
-
-def _validated(sub: Jsonable, vpath: list, frames: list, doc: Jsonable,
-               jm: JsonModel, seen: frozenset[str],
-               taken: set[str], key: str, marks: set[str]) -> list[Jsonable]:
-    """Valid whole document holding a value at one position, empty if there is none."""
-    here = _at(doc, vpath)
-    candidates = [sub]
-    if isinstance(sub, dict) and isinstance(here, dict) and {**here, **sub} != sub:
-        candidates.append({**here, **sub})
-    fallback: list[Jsonable] = []
-    for candidate in candidates:
-        value = _document(candidate, vpath, frames, doc, jm, seen)
-        wholes = [value]
-        if isinstance(value, dict) and isinstance(doc, dict) and {**doc, **value} != value:
-            wholes.append({**doc, **value})
-        for whole in wholes:
-            if _value_key(whole) in taken:
-                return [whole]
-            elif not fallback:
-                fallback = [whole]
-    if fallback:
-        marks.add(key)
-        return fallback
-    return []
-
 def _violations(model: ModelType, jm: JsonModel, # put some comments main algorithm
                 seen: frozenset[str] = frozenset(),
                 marks: set[str]|None = None,
@@ -1329,20 +1292,17 @@ def optionals(model: ModelType, jm: JsonModel, seen: frozenset[str] = frozenset(
                 continue
             try:
                 sub = {**built, name: simplest(submodel, jm, seen)}
-                found = _validated(sub, vpath, frames, doc, jm, seen, taken, key, marks) # remove validatoin maybe ( check it )
+                value = _document(sub, vpath, frames, doc, jm, seen)
             except Vacuous:
                 continue
             except UnsupportedValue as e:
                 reasons.append(f"{key}: {e}")
                 continue
-            if not found:
-                reasons.append(f"{key}: adding {name} is not valid")
-                continue
-            value = found[0]
             dumped = _value_key(value)
             if dumped in taken:
                 doubled.append(key)
                 continue
+            marks.add(key)
             values[key] = value
             taken.add(dumped)
     if not values and not reasons and not doubled:
@@ -1375,20 +1335,17 @@ def branches(model: ModelType, jm: JsonModel, seen: frozenset[str] = frozenset()
                 continue
             try:
                 sub = simplest(alt, jm, seen)
-                found = _validated(sub, vpath, frames, doc, jm, seen, taken, key, marks)
+                value = _document(sub, vpath, frames, doc, jm, seen)
             except Vacuous:
                 continue
             except UnsupportedValue as e:
                 reasons.append(f"{key}: {e}")
                 continue
-            if not found:
-                reasons.append(f"{key}: the alternative is not valid here")
-                continue
-            value = found[0]
             dumped = _value_key(value)
             if dumped in taken:
                 doubled.append(key)
                 continue
+            marks.add(key)
             values[key] = value
             taken.add(dumped)
     if not values and not reasons and not doubled:
@@ -1425,20 +1382,17 @@ def items(model: ModelType, jm: JsonModel, seen: frozenset[str] = frozenset(),
             sub = _holding(node, item, _guarding(guarded, vpath), jm, seen)
             if sub is None:
                 continue
-            found = _validated(sub, vpath, frames, doc, jm, seen, taken, key, marks)
+            value = _document(sub, vpath, frames, doc, jm, seen)
         except Vacuous:
             continue
         except UnsupportedValue as e:
             reasons.append(f"{key}: {e}")
             continue
-        if not found:
-            reasons.append(f"{key}: an item is not valid here")
-            continue
-        value = found[0]
         dumped = _value_key(value)
         if dumped in taken:
             doubled.append(key)
             continue
+        marks.add(key)
         values[key] = value
         taken.add(dumped)
     if not values and not reasons and not doubled:
