@@ -309,7 +309,7 @@ def _variants(model: ModelType, jm: JsonModel, seen: frozenset[str],
         else:
             values = ([] if ja._url in seen
                       else _variants(ja._model, ja, seen | {ja._url}, count))
-    elif isinstance(model, dict) and set(model) == {"|"}: # "|" in model
+    elif isinstance(model, dict) and "|" in model:
         values, keys = [], set()
         for alt in model["|"]:
             if isinstance(alt, str) and alt.startswith("#"):
@@ -603,11 +603,11 @@ def _simplest_operator(op: str, alts: ModelArray, jm: JsonModel,
 def _simplest_object(model: ModelObject, jm: JsonModel, seen: frozenset[str]) -> Jsonable:
     """Simplest value for a simple object model or a bare target model."""
     props = {p: m for p, m in model.items() if not p.startswith("#")}
-    if set(props) == {"|"}: # "|" in props everywhere 
+    if "|" in props:
         return _simplest_union(props["|"], jm, seen)
-    elif set(props) == {"^"}:
+    elif "^" in props:
         return _simplest_operator("^", props["^"], jm, seen)
-    elif set(props) == {"&"}:
+    elif "&" in props:
         return _simplest_operator("&", props["&"], jm, seen)
     elif "@" in props:
         others = set(props) - {"@"}
@@ -837,9 +837,9 @@ def _alternatives(sites: list):
         node = props["@"]
         if set(props) - {"@"} or not isinstance(node, dict):
             continue
-        keys = {p for p in node if not p.startswith("#")}
-        if keys in ({"|"}, {"^"}):
-            yield mpath, vpath, frames, node, next(iter(keys)), disjunction, guarded
+        op = "|" if "|" in node else "^" if "^" in node else None
+        if op is not None:
+            yield mpath, vpath, frames, node, op, disjunction, guarded
 
 def _overlapping(alts: ModelArray, jm: JsonModel,
                  seen: frozenset[str]) -> list[Jsonable]:
@@ -870,7 +870,7 @@ def _exclusive_sites(sites: list):
         node = props["@"]
         if set(props) - {"@"} or not isinstance(node, dict):
             continue
-        if {p for p in node if not p.startswith("#")} == {"^"}:
+        if "^" in node:
             yield mpath, vpath, frames, node, disjunction, guarded
 
 def _mpath(path: list) -> str:
@@ -956,8 +956,8 @@ def _sites(model: ModelType, mpath: list, vpath: list, frames: list,
                               (guarded[0],
                                guarded[1] + ((vpath, {p: props[p] for p in others}),))
                               if others else guarded)
-        elif set(props) in ({"|"}, {"^"}, {"&"}):
-            op = next(iter(props))
+        elif "|" in props or "^" in props or "&" in props:
+            op = "|" if "|" in props else "^" if "^" in props else "&"
             yield mpath, vpath, frames, {"@": model}, disjunction, guarded
             inner = (disjunction if disjunction is not None or op == "&"
                      else (vpath, props))
