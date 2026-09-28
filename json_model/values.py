@@ -435,11 +435,7 @@ _PREDEF_NAMES = {name: check for name, check in
                  if check is not None}
 
 def _matches(name: str, prop: str, jm: JsonModel|None = None) -> bool|None:
-    """Whether a name matches an object model property key, None if undecided.
-
-    Independent of the compiler, so that a disagreement shows up as a test failure.
-    With a model scope, a key referring to a string definition is resolved.
-    """
+    """Whether a name matches an object model property key, None if undecided."""
     if prop == "" or prop in _ANY_NAME_PREDEFS:
         return True
     elif prop.startswith("#") or prop in _NO_NAME_PREDEFS:
@@ -468,12 +464,7 @@ def _matches(name: str, prop: str, jm: JsonModel|None = None) -> bool|None:
         return name == (prop[1:] if prop.startswith(("!", "?", "_")) else prop)
 
 def _outranking(node: ModelObject, prop: str) -> list[str]:
-    """Property keys the model applies before a catch-all or pattern key.
-
-    A named property wins over a predefined one, which wins over any pattern,
-    and patterns apply in declaration order, so a generated name matching one of
-    these belongs to that key instead.
-    """
+    """Property keys the model applies before a catch-all or pattern key."""
     keys = [p for p in node if not p.startswith("#")]
     literals = [p for p in keys if p != "" and not p.startswith(("/", "$"))]
     predefs = [p for p in keys if p.startswith("$")]
@@ -487,11 +478,7 @@ def _outranking(node: ModelObject, prop: str) -> list[str]:
 
 def _names(prop: str, count: int, taken: set[str], outranking: list[str],
            jm: JsonModel|None = None) -> list[str]:
-    """Distinct property names matching a catch-all or pattern property model.
-
-    A catch-all accepts any name, so fall back on further starting letters when
-    an earlier key claims every name built from the first one.
-    """
+    """Distinct property names matching a catch-all or pattern property model."""
     try:
         seeds = list(_NAME_CHARS) if prop == "" else [_simplest_regex(prop)]
     except UnsupportedValue:
@@ -818,11 +805,7 @@ def _alternatives(sites: list):
 
 def _overlapping(alts: ModelArray, jm: JsonModel,
                  seen: frozenset[str]) -> list[Jsonable]:
-    """Value two alternatives of a xor build, which it therefore refuses.
-
-    Alternatives repeated word for word are left out: the optimizer removes
-    them, so what the model then means is not certain enough to claim.
-    """
+    """Value two alternatives of a xor build, which it therefore refuses."""
     models: dict[str, ModelType] = {}
     for alt in alts:
         if not (isinstance(alt, str) and alt.startswith("#")):
@@ -886,17 +869,7 @@ def _sites(model: ModelType, mpath: list, vpath: list, frames: list,
            jm: JsonModel, seen: frozenset[str], notes: list[str]|None = None,
            disjunction: tuple[list, ModelObject]|None = None,
            guarded: tuple = (False, ())):
-    """Violation sites, as model path, value path, branch frames, properties and disjunction.
-
-    A site under an alternative of a union or a xor carries the outermost one, as the
-    value path where it applies and its node: breaking the model there only invalidates
-    the document when every alternative of that operator rejects the value.
-
-    A site carries what stands above it as a guard: whether a xor or a conjunction
-    chose there, which nothing built below can show again, and the constraints met on
-    the way down, with the value path each applies to, which a whole document can be
-    measured against.
-    """
+    """Violation sites, as model path, value path, branch frames, properties and disjunction."""
     if isinstance(model, str):
         name = model[1:]
         if model.startswith("$") and name in jm._defs._syms and name not in seen:
@@ -981,15 +954,12 @@ def _document(sub: Jsonable, vpath: list, frames: list, doc: Jsonable,
     else:
         return _replaced(doc, path, value)
 
-def _violations(model: ModelType, jm: JsonModel, # put some comments main algorithm
+def _violations(model: ModelType, jm: JsonModel,
                 seen: frozenset[str] = frozenset(),
                 marks: set[str]|None = None,
                 valid: frozenset[str] = frozenset()
-                ) -> tuple[dict[str, Jsonable], list[str], list[str], list[str]]: # more docs
-    """Generate a value breaking each constraint, and which sites were skipped, repeated or lost.
-
-    Values already generated as valid, as JSON dumps, are known to match the model.
-    """
+                ) -> tuple[dict[str, Jsonable], list[str], list[str], list[str]]:
+    """Generate a value breaking each constraint, and which sites were skipped, repeated or lost."""
     skipped: list[str] = []
     doubled: list[str] = []
     failed: list[str] = []
@@ -1449,10 +1419,7 @@ def _checker(jm: JsonModel) -> EntryCheckFun|None:
         return None
 
 def _recheck(entries: list[tuple[int, str, list]], jm: JsonModel) -> None:
-    """Settle every mark against one checker of the whole model, null where it disagrees.
-
-    A root value of another type is only a guess, dropped when the checker takes it.
-    """
+    """Settle every mark against one checker of the whole model, null where it disagrees."""
     judged = [entry for *_, entry in entries
               if len(entry) == 2 and isinstance(entry[0], str)]
     if not judged:
