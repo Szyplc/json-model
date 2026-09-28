@@ -546,13 +546,9 @@ def _simplest_constrained(props: ModelObject, jm: JsonModel, seen: frozenset[str
     """Simplest value for a constraint model. To use only without comments"""
     target = props["@"]
     ops = {p: c for p, c in props.items() if p != "@"}
-    #if any(isinstance(c, str) for p, c in ops.items() if p in _COMPARISONS):
-    #    raise UnsupportedValue(f"unsupported string comparison constraint: {ops}")
-    #if any(isinstance(c, bool) or not isinstance(c, (int, float))
-    #       for p, c in ops.items() if p in _COMPARISONS):
-    #    raise UnsupportedValue(f"unsupported comparison constraint: {ops}")
-    
-    # keep only integer and float comparision, keep and unique
+    if any(isinstance(c, bool) or not isinstance(c, (int, float))
+           for p, c in ops.items() if p in _COMPARISONS):
+        raise UnsupportedValue(f"unsupported comparison constraint: {ops}")
     unique = ops.get("!") is True # unique never is False optimizer will remove it
     base = simplest(target, jm, seen)
     if base is None or isinstance(base, bool): # make assert from if
@@ -562,7 +558,8 @@ def _simplest_constrained(props: ModelObject, jm: JsonModel, seen: frozenset[str
     elif isinstance(base, (int, float)):
         is_float = isinstance(base, float)
         step: int|float = 1.0 if is_float else 1
-        lo, hi = _bounds(ops, step, _numeric_low(target))
+        low = _numeric_low(jm.resolveRef(target, [])._model if jm._isRef(target) else target)
+        lo, hi = _bounds(ops, step, low)
         value = _pick(lo, hi, ops, step, 0.0 if is_float else 0)
         return float(value) if is_float else int(value)
     lo, hi = _bounds(ops, 1, 0)
