@@ -17,6 +17,7 @@ from .python import PYTHON_RUNTIME_PREDEFS
 from .runtime import support
 from .runtime.types import EntryCheckFun
 from .utils import cst, is_a_simple_object
+from .submodel import structure
 
 _MODEL_NAME_RE = re.compile(r"^[^\s\[\]'\"]+$")
 _CATEGORIES = {
@@ -370,8 +371,8 @@ def _kinds(jm: JsonModel, model: ModelType, seen: frozenset[str]) -> set[type]|N
         node = jm.resolveRef(model, [])
         if node._url not in seen:
             model, jm, seen = node._model, node, seen | {node._url}
-    op = next((o for o in ("|", "^") if isinstance(model, dict) and o in model), None)
-    if op is None:
+    op = structure(model)
+    if op not in ("|", "^"):
         kind = analyze.ultimate_type(jm, model)
         return None if kind is None else {kind}
     kinds: set[type] = set()
@@ -785,8 +786,8 @@ def _alternatives(sites: list):
         node = props["@"]
         if set(props) - {"@"} or not isinstance(node, dict):
             continue
-        op = "|" if "|" in node else "^" if "^" in node else None
-        if op is not None:
+        op = structure(node)
+        if op in ("|", "^"):
             yield mpath, vpath, frames, node, op, disjunction, guarded
 
 def _overlapping(alts: ModelArray, jm: JsonModel,
@@ -890,8 +891,8 @@ def _sites(model: ModelType, mpath: list, vpath: list, frames: list,
                               (guarded[0],
                                guarded[1] + ((vpath, {p: props[p] for p in others}),))
                               if others else guarded)
-        elif "|" in props or "^" in props or "&" in props:
-            op = "|" if "|" in props else "^" if "^" in props else "&"
+        elif structure(props) in ("|", "^", "&"):
+            op = structure(props)
             yield mpath, vpath, frames, {"@": model}, disjunction, guarded
             inner = (disjunction if disjunction is not None or op == "&"
                      else (vpath, props))
