@@ -17,7 +17,6 @@ from .runtime import support
 from .runtime.types import EntryCheckFun
 
 _NUMBER_RE = re.compile(r"^=-?\d+(\.\d+)?([Ee][-+]?\d+)?$")
-_JQ_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _MODEL_NAME_RE = re.compile(r"^[^\s\[\]'\"]+$")
 _CONSTANTS = {"=null": None, "=true": True, "=false": False}
 _CATEGORIES = {
@@ -887,20 +886,6 @@ def _exclusive_sites(sites: list):
         if {p for p in node if not p.startswith("#")} == {"^"}:
             yield mpath, vpath, frames, node, disjunction, guarded
 
-def _jqpath(path: list) -> str: # check if it is written in _path in runtime support
-    """jq path expression for a path of object keys and array indexes."""
-    if not path:
-        return "."
-    steps = []
-    for step in path:
-        if isinstance(step, int) and not isinstance(step, bool):
-            steps.append(f"[{step}]")
-        elif _JQ_NAME_RE.match(str(step)):
-            steps.append(f".{step}")
-        else:
-            steps.append(f"[{json.dumps(str(step))}]")
-    return "." + "".join(steps) if steps[0][0] == "[" else "".join(steps)
-
 def _mpath(path: list) -> str:
     """Readable model path, written in JSON Model syntax."""
     steps: list[str] = []
@@ -932,7 +917,7 @@ def _replaced(doc: Jsonable, path: list, value: Jsonable) -> Jsonable:
             node = node[step]
         node[path[-1]] = value
     except (KeyError, IndexError, TypeError) as e:
-        raise UnsupportedValue(f"cannot set {_jqpath(path)} in document: {e}")
+        raise UnsupportedValue(f"cannot set {support._path(path)} in document: {e}")
     return result
 
 def _sites(model: ModelType, mpath: list, vpath: list, frames: list,
