@@ -127,17 +127,15 @@ def _simplest_scalar(model: ModelType) -> JsonScalar:
                 return 0.0
             return _PI if model == 1.0 else -_PI
         case _:
-            raise UnsupportedValue(f"not a scalar model: {model}")
+            assert False, f"not a scalar model: {model}"
 
 def _simplest_constant(model: str) -> JsonScalar:
     """Simplest value for a scalar constant model."""
     if model in _CONSTANTS:
         return _CONSTANTS[model]
-    elif _NUMBER_RE.match(model) is None:
-        raise UnsupportedValue(f"invalid scalar constant model: {model}")
-    else:
-        number = model[1:]
-        return float(number) if any(c in number for c in ".eE") else int(number)
+    assert _NUMBER_RE.match(model), f"invalid scalar constant model: {model}"
+    number = model[1:]
+    return float(number) if any(c in number for c in ".eE") else int(number)
 
 def _regex_char(item) -> str:
     """Simplest character for a regex character class item."""
@@ -176,8 +174,7 @@ def _regex_walk(pattern) -> str:
 
 def _simplest_regex(model: str) -> str:
     """Simplest value for a regex model."""
-    if "/" not in model[1:]:
-        raise UnsupportedValue(f"invalid regex model: {model}")
+    assert "/" in model[1:], f"invalid regex model: {model}"
     pattern, opts = model[1:].rsplit("/", 1)
     if "X" in opts:
         raise UnsupportedValue(f"unsupported extended regex model: {model}")
@@ -549,11 +546,9 @@ def _simplest_constrained(props: ModelObject, jm: JsonModel, seen: frozenset[str
         raise UnsupportedValue(f"unsupported comparison constraint: {ops}")
     unique = "!" in ops
     base = simplest(target, jm, seen)
-    if base is None or isinstance(base, bool): # make assert from if
-        raise UnsupportedValue(f"unsupported constrained model: {target}") # {"@": true, "=": false} take this example, generator assume that type have sense, so we assume that compiler check it
-    elif unique and not isinstance(base, list):
-        raise UnsupportedValue(f"unique constraint on a non-array: {target}")
-    elif isinstance(base, (int, float)):
+    assert base is not None and not isinstance(base, bool), f"unsupported constrained model: {target}"
+    assert not unique or isinstance(base, list), f"unique constraint on a non-array: {target}"
+    if isinstance(base, (int, float)):
         is_float = isinstance(base, float)
         step: int|float = 1.0 if is_float else 1
         low = _numeric_low(jm.resolveRef(target, [])._model if jm._isRef(target) else target)
@@ -654,15 +649,14 @@ def simplest(model: ModelType, jm: JsonModel, seen: frozenset[str] = frozenset()
         case dict():
             return _simplest_object(model, jm, seen)
         case _:
-            raise UnsupportedValue(f"unexpected model: {model}")
+            assert False, f"unexpected model: {model}"
 
 def _violation_value(op: str, bound: Jsonable, props: ModelObject, base: Jsonable,
                      jm: JsonModel, seen: frozenset[str]) -> Jsonable:
     """Candidate value just past a constraint, on its violating side."""
     target, ops = props["@"], {p: c for p, c in props.items() if p != "@"}
     if op == "!":
-        if bound is not True:
-            raise UnsupportedValue(f"unsupported unique constraint: {bound}")
+        assert bound is True, f"unsupported unique constraint: {bound}"
         lo, hi = _bounds(ops, 1, 0)
         lo = 2 if lo is None else max(lo, 2)
         return _sized(target, base, int(_pick(lo, hi, ops, 1, 0)), False, jm, seen)
@@ -690,10 +684,9 @@ def _violations_constrained(props: ModelObject, jm: JsonModel,
     if any(isinstance(c, str) for p, c in ops.items() if p in _COMPARISONS):
         raise UnsupportedValue(f"unsupported string comparison constraint: {ops}")
     base = simplest(target, jm, seen)
-    if isinstance(base, bool) or not isinstance(base, (int, float, str, list, dict)):
-        raise UnsupportedValue(f"unsupported constrained model: {target}")
-    elif "!" in ops and not isinstance(base, list):
-        raise UnsupportedValue(f"unique constraint on a non-array: {target}")
+    assert isinstance(base, (int, float, str, list, dict)) and not isinstance(base, bool), \
+        f"unsupported constrained model: {target}"
+    assert "!" not in ops or isinstance(base, list), f"unique constraint on a non-array: {target}"
     values: dict[str, Jsonable] = {}
     for op, bound in ops.items():
         try:
