@@ -41,11 +41,6 @@ _ROOT_REF = "$#"
 _ROOT_NAME = "Root"
 _COMPARISONS = {"=", "!=", "<", "<=", ">", ">="}
 _CONSTRAINTS = _COMPARISONS | {"!"}
-_BREAKING = {
-    "=": lambda m, b: m != b, "!=": lambda m, b: m == b,
-    "<": lambda m, b: m >= b, "<=": lambda m, b: m > b,
-    ">": lambda m, b: m <= b, ">=": lambda m, b: m < b,
-}
 _INT_VIOLATIONS = {
     ">=": lambda n: math.ceil(n) - 1, ">": lambda n: math.floor(n),
     "<=": lambda n: math.floor(n) + 1, "<": lambda n: math.ceil(n),
@@ -428,32 +423,6 @@ def _justified(utype: type|None) -> list[Jsonable]:
     """Type violations the oracle can justify first, so a marked value is a last resort."""
     return sorted(_TYPE_VIOLATIONS, key=lambda candidate: not _mistyped(candidate, utype))
 
-def _measured(value: Jsonable) -> int|float|None:
-    """What a constraint compares: a number itself, otherwise a length."""
-    if isinstance(value, bool):
-        return None
-    elif isinstance(value, (int, float)):
-        return value
-    elif isinstance(value, (str, list, dict)):
-        return len(value)
-    else:
-        return None
-
-def _breaks(op: str, bound: Jsonable, value: Jsonable) -> bool: # try to remove that function
-    """Whether a value certainly violates one constraint of an object model."""
-    if op in _COMPARISONS:
-        if isinstance(bound, str):
-            return not isinstance(value, str) or _BREAKING[op](value, bound)
-        measure = _measured(value)
-        if measure is None or isinstance(bound, bool) or not isinstance(bound, (int, float)):
-            return False
-        return _BREAKING[op](measure, bound)
-    elif op == "!" and bound is True and isinstance(value, list):
-        dumped = [_value_key(item) for item in value]
-        return len(set(dumped)) < len(dumped)
-    else:
-        return False
-
 def _checked(predef: str):
     """Existing format check for a predefined model: its backend implementation, else the fallback regex."""
     if predef in PYTHON_RUNTIME_PREDEFS:
@@ -619,11 +588,7 @@ def _simplest_constrained(props: ModelObject, jm: JsonModel, seen: frozenset[str
     length = int(_pick(lo, hi, ops, 1, 0))
     if isinstance(base, dict):
         return _grown(target, base, length, jm, seen)
-    value = _sized(target, base, length, unique, jm, seen)
-    if unique and length > 1 and _breaks("!", True, value): # remove it breaks and we don't check break later
-        raise UnsupportedValue(f"unique constraint is not satisfiable: {target}")
-    else:
-        return value
+    return _sized(target, base, length, unique, jm, seen)
 
 def _simplest_union(alts: ModelArray, jm: JsonModel, seen: frozenset[str]) -> Jsonable:
     """Simplest value for the first alternative which yields one."""
@@ -971,16 +936,10 @@ def _violations_constrained(props: ModelObject, jm: JsonModel,
     values: dict[str, Jsonable] = {}
     for op, bound in ops.items():
         rest = {p: m for p, m in props.items() if p != op}
-        broken = None
         for value in _candidates(op, bound, props, base, jm, seen):
             if _verify(value, props, jm) is False and _verify(value, rest, jm) is True:
                 values[op] = value
                 break
-            elif broken is None and _breaks(op, bound, value):
-                broken = value
-        else:
-            if broken is not None:
-                values[op] = broken
     if not values:
         raise UnsupportedValue(f"no constraint could be violated: {props}")
     else:
@@ -1032,17 +991,10 @@ def _bounds_constrained(props: ModelObject, jm: JsonModel,
         raise UnsupportedValue(f"unique constraint on a non-array: {target}")
     values: dict[str, Jsonable] = {}
     for op, bound in ops.items():
-        unbroken = None
         for value in _bound_candidates(op, bound, props, base, jm, seen):
             if _verify(value, props, jm) is True:
                 values[op] = value
                 break
-            elif unbroken is None and not any(_breaks(p, c, value)
-                                              for p, c in ops.items()):
-                unbroken = value
-        else:
-            if unbroken is not None:
-                values[op] = unbroken
     if not values:
         raise UnsupportedValue(
             f"no bound reached for {', '.join(ops)} in model: {_brief(target)}")
