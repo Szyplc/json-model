@@ -642,20 +642,6 @@ def _simplest_string(model: str, jm: JsonModel, seen: frozenset[str]) -> Jsonabl
     else:
         return model
 
-def _property_name(prop: str, taken: set[str], outranking: list[str], # check it
-                   jm: JsonModel|None = None) -> str:
-    """Property name matching a pattern property, free of any other key of the object."""
-    def usable(name: str) -> bool:
-        return (name not in taken
-                and not any(_matches(name, other, jm) is True for other in outranking))
-    name = _simplest_regex(prop)
-    if usable(name):
-        return name
-    for suffix in ("0", "00", "000"):
-        if usable(name + suffix) and _matches(name + suffix, prop, jm) is True:
-            return name + suffix
-    raise UnsupportedValue(f"no free property name for {prop}")
-
 def simplest(model: ModelType, jm: JsonModel, seen: frozenset[str] = frozenset()) -> Jsonable:
     """Generate the simplest value matching a model."""
     match model:
@@ -971,12 +957,12 @@ def _sites(model: ModelType, mpath: list, vpath: list, frames: list,
                 if prop == "" or prop.startswith("$"):
                     continue
                 elif prop.startswith("/"):
-                    try:
-                        name = _property_name(prop, named, _outranking(props, prop), jm)
-                    except UnsupportedValue as e:
+                    found = _names(prop, 1, named, _outranking(props, prop), jm)
+                    if not found:
                         if notes is not None:
-                            notes.append(f"{_mpath(mpath + [prop])} invalid: {e}")
+                            notes.append(f"{_mpath(mpath + [prop])} invalid: no free property name for {prop}")
                         continue
+                    name = found[0]
                     inner = frames + [(vpath + [name], sub)]
                 else:
                     name = prop[1:] if prop.startswith(("!", "?", "_")) else prop
