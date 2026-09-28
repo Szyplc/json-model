@@ -761,7 +761,7 @@ def _bound_candidates(op: str, bound: Jsonable, props: ModelObject, base: Jsonab
             pass
 
 def _bounds_constrained(props: ModelObject, jm: JsonModel,
-                        seen: frozenset[str]) -> dict[str, Jsonable]: # some verification are not useful already checked types remove it or assert
+                        seen: frozenset[str]) -> dict[str, Jsonable]:
     """One value per constraint, each on the last step it still accepts."""
     target = props["@"]
     ops = {p: c for p, c in props.items() if p != "@"}
@@ -769,10 +769,6 @@ def _bounds_constrained(props: ModelObject, jm: JsonModel,
            for p, c in ops.items() if p in _COMPARISONS):
         raise UnsupportedValue(f"unsupported comparison constraint: {ops}")
     base = simplest(target, jm, seen)
-    if isinstance(base, bool) or not isinstance(base, (int, float, str, list, dict)):
-        raise UnsupportedValue(f"unsupported constrained model: {target}")
-    elif ops.get("!") is True and not isinstance(base, list):
-        raise UnsupportedValue(f"unique constraint on a non-array: {target}")
     values: dict[str, Jsonable] = {}
     for op, bound in ops.items():
         for value in _bound_candidates(op, bound, props, base, jm, seen):
