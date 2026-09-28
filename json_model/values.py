@@ -11,7 +11,8 @@ from .mtypes import ModelType, ModelArray, ModelObject, Jsonable, JsonScalar, Mo
 from .model import JsonModel
 from .resolver import Resolver
 from . import analyze
-from .predefs import MODEL_PREDEFS, PREDEFS, PREDEF_RE, STR_MODEL_PREDEFS
+from .predefs import (MODEL_PREDEFS, PREDEFS, PREDEF_RE, STR_MODEL_PREDEFS,
+                      BOOL_MODEL_PREDEFS, INT_MODEL_PREDEFS, FLOAT_MODEL_PREDEFS)
 from .python import PYTHON_RUNTIME_PREDEFS
 from .runtime import support
 from .runtime.types import EntryCheckFun
@@ -27,10 +28,7 @@ _ANY_CHAR = "a"
 _ITEM_VARIANTS = 2
 _NAME_CHARS = "abcdefghijklmnopqrstuvwxyz"
 _ANY_NAME_PREDEFS = {"$ANY", "$STRING"}
-_NO_NAME_PREDEFS = {
-    "$NULL", "$NONE", "$BOOL", "$BOOLEAN", "$INT", "$INTEGER", "$I32", "$I64",
-    "$U32", "$U64", "$FLOAT", "$F32", "$F64", "$NUMBER",
-}
+_NO_NAME_PREDEFS = {"$NULL", "$NONE"} | BOOL_MODEL_PREDEFS | INT_MODEL_PREDEFS | FLOAT_MODEL_PREDEFS
 _OPERATORS = {"@", "|", "&", "^", "!", "=", "!=", "<", "<=", ">", ">="}
 _QUOTED_OPS = _OPERATORS - {"@"}
 _ROOT_KEYS = {"$", "%", "~"}
