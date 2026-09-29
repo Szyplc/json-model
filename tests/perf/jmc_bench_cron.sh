@@ -2,25 +2,62 @@
 #
 # run performance script from cron
 #
+# NOTE running cron script is a copy
+
+#
+# Bench setup
+#
+# latest performance scripts
+PERF=$HOME/dev/json-model/tests/perf
+
+# git working directory for json-model publication
+WORK=$HOME/dev/cron-json-model
+
+# directory for performance benchmark runs
+TARGET=$HOME/perf
+
+# where to store latest run versions
+VERSION=$TARGET/.bench_version
+
+#
 # Environment overrides:
 #
-# - JMC: docker tag for jmc image (main)
-# - JMC_BENCH: docker tag for jmc-bench image  (main)
 # - PARA: bench parallelism (12)
 # - LOOP: bench iterations (1000)
 # - RUNS: number of runs (11)
+# - JMC: docker tag for jmc image (main)
+# - JMC_BENCH: docker tag for jmc-bench image  (main)
+# - SBC: docker tag for sourcemeta blaze cli (latest)
 #
+# benchmarking parameters
+export PARA=${PARA:-12}
+export LOOP=${LOOP:-1000}
+export RUNS=${RUNS:-11}
 
-# running script is a copy
-PERF=$HOME/dev/json-model/tests/perf
-WORK=$HOME/dev/cron-json-model
-TARGET=$HOME/perf
+# docker tags
+export JMC=${JMC:-main}
+export JMC_BENCH=${JMC_BENCH:-main}
+export SBC=${SBC:-latest}
+
+# docker images
+SBC_IMG=ghcr.io/sourcemeta/jsonschema:$SBC
+JMC_IMG=docker.io/zx80/jmc:$JMC
+BENCH_IMG=docker.io/zx80/jmc-bench-docker:$JMC_BENCH
+
+# setup standard run
+export JMC_OPTS="--single-line-regex --cc=clang --precompiled --short-version"
+# defaults are the next one with 2 exceptions
+# export JSU_OPTS="--id --fix --no-strict"
+# export JSU_OPTS="--id --no-fix --no-strict"
+# export JSU_OPTS="--no-id --no-fix --no-strict"
+export JSB_DIR="$TARGET/jsb_dir"
+export POD_PULL=0  # do not pull images again!
 
 function err()
 {
   local status=$1
   shift 1
-  echo "$@" >&2
+  echo "[bench] $@" >&2
   exit $status
 }
 
@@ -64,9 +101,9 @@ done
 test -d $PERF || err 2 "missing source directory: $PERF"
 test -x $PERF/start_bench.sh || err 3 "missing executable: $PERF/start_bench.sh"
 test -d $TARGET || err 2 "missing target directory: $TARGET"
-test -d $TARGET/jsb_dir || err 2 "missing json-schema benchmark directory: $TARGET/jsb_dir"
+test -d $JSB_DIR || err 2 "missing json-schema benchmark directory: $JSB_DIR"
 
-if [ "$publish" ] ; then
+if [ ! "$no_publish" ] ; then
   test -d $WORK || err 2 "missing working directory: $WORK"
 fi
 
@@ -80,23 +117,16 @@ done
 if [ "$check" ] ; then
   cd $TARGET || err 5 "cannot cd to: $TARGET"
 
-  VERSION=$TARGET/.bench_version
-
-  SBC_IMG=ghcr.io/sourcemeta/jsonschema:latest
-  JMC_IMG=docker.io/zx80/jmc:latest
-  BENCH_IMG=docker.io/zx80/jmc-bench-docker:latest
-
   docker pull $SBC_IMG || err 6 "cannot docker pull: $SBC_IMG"
   docker pull $JMC_IMG || err 6 "cannot docker pull: $JMC_IMG"
   docker pull $BENCH_IMG || err 6 "cannot docker pull: $JMC_BENCH_IMG"
 
-  docker run --rm --name sbc_version_$$ $SBC_IMG --version > $VERSION.sbc.tmp || err 7 "error getting version: $SBC"
-  docker run --rm --name jmc_version_$$ --entrypoint jsu-compile $JMC_IMG --version > $VERSION.jmc.tmp || err 7 "error getting version: $JMC"
-  # bench docker version?
-  # jsb git version?
+  docker run --rm --name sbc_version_$$ $SBC_IMG --version > $VERSION.sbc.tmp || err 7 "error getting version: $SBC_IMG"
+  docker run --rm --name jmc_version_$$ --entrypoint jsu-compile $JMC_IMG --version > $VERSION.jmc.tmp || err 7 "error getting version: $JMC_IMG"
+  git -C "$JSB_DIR" rev-parse HEAD > $VERSION.jsb.tmp || err 7 "error getting git version: $JSB_DIR"
 
   # run if versions differ
-  for tool in sbc jmc ; do
+  for tool in sbc jmc jsb ; do
     cmp -s $VERSION.$tool $VERSION.$tool.tmp || run=1
   done
 fi
@@ -105,17 +135,6 @@ fi
 # run bench if required
 #
 if [ "$run" ] ; then
-
-  # setup standard run
-  export JMC=${JMC:-main}
-  export JMC_OPTS="--single-line-regex --cc=clang --precompiled --short-version"
-  # defaults are the next one with 2 exceptions
-  # export JSU_OPTS="--id --fix --no-strict"
-  # export JSU_OPTS="--id --no-fix --no-strict"
-  # export JSU_OPTS="--no-id --no-fix --no-strict"
-  export JSB_DIR="$TARGET/jsb_dir"
-  export POD_PULL=0  # do not pull images again!
-  export JMC_BENCH=${JMC_BENCH:-main}
 
   if [ ! "$bench_id" ] ; then
     # generate unique bench id
@@ -130,8 +149,6 @@ if [ "$run" ] ; then
     echo "using bench_id: $bench_id"
   fi
 
-  PARA=${PARA:-12} LOOP=${LOOP:-1000} RUNS=${RUNS:-11}
-
   $PERF/calcutta.sh on
   $PERF/start_bench.sh $JMC_BENCH $bench_id -p $PARA -l $LOOP -r $RUNS -L -c "$@"
   $PERF/calcutta.sh off
@@ -142,7 +159,7 @@ if [ "$run" ] ; then
     test -f $file || err 9 "missing generated file: $file"
   done
 
-  # check minimal sizes
+  # check minimal sizes to ensure success
   msize=$(stat --format "%s" $bench_id/$bench_id.md)
   [ "$msize" -ge 8192 ] || err 9 "small generated file: $bench_id.md"
 
@@ -151,9 +168,10 @@ if [ "$run" ] ; then
 
   # record benchmark version
   if [ "$check" ] ; then
-    cp $VERSION.sbc.tmp $VERSION.sbc
-    cp $VERSION.jmc.tmp $VERSION.jmc
-    rm -f $VERSION.sbc.tmp $VERSION.jmc.tmp
+    for tool in sbc jmc jsb ; do
+      cp $VERSION.$tool.tmp $VERSION.$tool
+      rm -f $VERSION.$tool.tmp
+    done
   fi
 
   # switch publish unless disabled
@@ -161,7 +179,7 @@ if [ "$run" ] ; then
 fi
 
 #
-# publish (new) artifact
+# publish (new) artifact on the "post" branch
 #
 if [ "$publish" ] ; then
 
@@ -169,7 +187,7 @@ if [ "$publish" ] ; then
 
   cd $WORK || err 10 "cannot cd to: $WORK"
 
-  # should be auth with a github PAT
+  # should be auth'ed with a github PAT
   git checkout post || err 11 "cannot git checkout post"
   git pull || err 11 "cannot git pull"
   git submodule update || err 11 "cannot git submodule update"

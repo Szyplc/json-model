@@ -8,6 +8,7 @@ export TMPDIR=.
 
 # container wrappers
 js_cli=js-cli
+ajv_cli=ajv-cli
 jmc=jmc
 jsu_compile="$jmc exec jsu-compile"
 
@@ -55,6 +56,7 @@ Environment:
 - JMC_JAVA_LIBS: java JSON libraries, in GSON Jackson JSONP, default is all
 - JSU_OPTS: jsu compiler options override
 - JSC: jsonschema blaze cli container tag
+- AJV: ajv cli container tag
 - PATH: where to find "jmc" and "js-cli" wrappers
 - WORKDIR: working directory to use
 - JSB_DIR: jsonschema benchmark directory
@@ -69,7 +71,10 @@ EOF
 # defaults
 LOOP=1000 TASK="all"
 # command options
-jsu_opts_2=" $JSU_OPTS" jmc_opts_2= blaze_cmp_opts= blaze_val_opts=
+jsu_opts_2=" $JSU_OPTS"
+jmc_opts_2=
+ajv_cmp_opts=" --messages=false --code-optimize=2 --strict=false" ajv_val_opts=
+blaze_cmp_opts= blaze_val_opts=
 
 # handle options
 while [[ "$1" == -* ]] ; do
@@ -126,7 +131,7 @@ case $TARGET in
   all) targets="blaze jsu jmc-c jmc-js jmc-java jmc-py jmc-pl" ;;
   jmc) targets="jsu jmc-c jmc-js jmc-java jmc-py jmc-pl" ;;
   jmc-c|jmc-js|jmc-java|jmc-py|jmc-pl) targets="jsu $TARGET" ;;
-  blaze) targets="blaze" ;;
+  blaze|ajv) targets=$TARGET ;;
   *) err 1 "unexpected target: $TARGET" ;;
 esac
 
@@ -186,7 +191,7 @@ for dir ; do
   #  - `--no-reporting`: do not generate invalidation location reporting code
   #  - `--loose`: assume loose integers (42.0 is an int) and floats (42 is a float)
   #
-  jmc_c_opts=""
+  jmc_c_opts="-DJMC_REGEX_LOOSE"
   jmc_x_opts=$jmc_c_opts
 
   # additional options may override the above defaults
@@ -206,6 +211,10 @@ for dir ; do
     jmc_js_ko=9 jmc_py_ko=9 jmc_pl_ko=9
     jmc_java_ko=9 jmc_class_ko=9
 
+    # keep initial model
+    [ -f $prefix.schema.json ] ||
+        cp $dir/schema.json $prefix.schema.json
+
     # blaze compilation
     [ "$do_cmp" -a $trg = "blaze" ] && {
       echo "## $dir blaze compile"
@@ -213,6 +222,15 @@ for dir ; do
         $js_cli compile $blaze_cmp_opts -m -f $dir/schema.json > ${prefix}.blaze.json
       blaze_ko=$?
       echo "## blaze ko: $blaze_ko"
+    }
+
+    # ajv compilation
+    [ "$do_cmp" -a $trg = "ajv" ] && {
+      echo "## $dir ajv compile"
+      ctime "$name,ajv,$now," "$prefix" ajv \
+        $ajv_cli compile $ajv_cmp_opts -s $dir/schema.json -o ${prefix}_ajv.cjs
+      ajv_ko=$?
+      echo "## ajv ko: $ajv_ko"
     }
 
     # schema to model
@@ -286,9 +304,15 @@ for dir ; do
     #
     [ "$trg" = "blaze" -a "$blaze_ko" -eq 0 ] && {
       echo "## $dir blaze run"
-      $js_cli validate $blaze_val_opts -m ${prefix}.blaze.json -b -l $LOOP \
+      $js_cli validate $blaze_val_opts -m ${prefix}.blaze.json -c -b -l $LOOP \
         $dir/schema.json $dir/instances.jsonl \
           > ${prefix}_blaze.out
+    }
+
+    [ "$trg" = "ajv" -a "$ajv_ko" -eq 0 ] && {
+      echo "## $dir ajv run"
+      $ajv_cli node $ajv_val_opts ${prefix}_ajv.cjs -T $LOOP --jsonl $dir/instances.jsonl \
+        2> ${prefix}_ajv.out
     }
 
     [ "$trg" = "jmc-c" -a "$jmc_out_ko" -eq 0 ] && {

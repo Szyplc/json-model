@@ -25,14 +25,14 @@ function json_model_2(val, path, rep)
         return false
     pval = val["x"]
     // .'$bla'.x
-    let res = (typeof pval === 'number' || pval instanceof Number)
+    let res = (typeof pval == 'number' || pval instanceof Number)
     if (! res)
         return false
     if (! val.hasOwnProperty("y"))
         return false
     pval = val["y"]
     // .'$bla'.y
-    return (typeof pval === 'number' || pval instanceof Number)
+    return (typeof pval == 'number' || pval instanceof Number)
 }
 
 // check $foo (.'$foo')

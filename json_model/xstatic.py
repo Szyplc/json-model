@@ -5,7 +5,7 @@ import json
 from functools import reduce
 
 from .mtypes import ModelType, ModelArray, ModelObject, ModelError, ModelPath, Symbols
-from .mtypes import Jsonable, Number, JsonScalar
+from .mtypes import Jsonable, Number, JsonScalar, NullType, TopType
 from .utils import split_object, model_in_models, all_model_type, constant_value
 from .utils import is_a_simple_object, partition, is_base_model, resolve_model, model_type
 from .utils import log, tname
@@ -14,7 +14,8 @@ from .runtime.support import _path as json_path
 from .analyze import ultimate_type, disjunct_analyse, distinct_prop_objects, ultimate_model
 from .model import JsonModel
 from .language import Language, Code, Block, BoolExpr, PathExpr, PropMap, JsonExpr, StrExpr, Var
-from .irep import IRep, optimizeIR, evaluate, ir_evaluate
+from .irep import IRep, evaluate, ir_evaluate
+from .iroptim import optimizeIR
 
 # probability of named optional props in an object
 MAY_P = 0.5
@@ -475,7 +476,7 @@ class CodeGenerator:
         gen = self._lang
 
         tmodel = ultimate_type(jm, model["@"])  # type: ignore
-        assert tmodel in (bool, int, float, str, list, dict, type(None), None)
+        assert tmodel in (bool, int, float, str, list, dict, NullType, None, TopType)
 
         # get which props are set
         cmp_props = set(
@@ -2355,6 +2356,8 @@ def make_language(
         regex_opt: bool = True,
         unique_opt: bool = True,
         strcmp_cset_partition_threshold: int = 32,
+        js_direct: bool = True,
+        js_runtime: str = "node",
     ) -> tuple[Language|None, str|None]:
     """Build the back-end for a target language, and its default package."""
 
@@ -2377,7 +2380,7 @@ def make_language(
         from .javascript import JavaScript
         language = JavaScript(
             debug=debug, with_report=report, with_path=report, with_comment=comment,
-            with_predef=predef, relib=relib or "re"
+            with_predef=predef, relib=relib or "re", direct=js_direct, runtime=js_runtime,
         )
     elif lang in ("plpgsql", "sql"):
         from .plpgsql import PLpgSQL
@@ -2447,6 +2450,8 @@ def xstatic_compile(
         max_strcmp_cset: int = 64,
         byte_order: str = "le",
         mark: str|None = None,
+        js_direct: bool = True,
+        js_runtime: str = "node",
     ) -> Code:
     """Generate the check source code for a model.
 
@@ -2487,6 +2492,8 @@ def xstatic_compile(
     - xor_is_not: detect a xor which is a not (any or str)
     - homogeneous_list: factor out type check on homogeneous lists (or, and…)
     - byte_order: le, be or dpd
+    - js_direct: use more direct code in some cases
+    - js_runtime: JS runtime
     """
 
     # set default threshold for must-only scheme
@@ -2581,6 +2588,7 @@ def xstatic_compile(
         lang, package=package,
         debug=debug, report=report, comment=comment, predef=predef, relib=relib,
         inline=inline, strcmp=strcmp, byte_order=byte_order,
+        js_direct=js_direct, js_runtime=js_runtime,
         max_strcmp_cset=max_strcmp_cset, regex_opt=regex_opt, unique_opt=unique_opt,
         strcmp_cset_partition_threshold=strcmp_cset_partition_threshold,
     )
@@ -2647,6 +2655,8 @@ def ir_compile(
         regex_opt: bool = True,
         unique_opt: bool = True,
         strcmp_cset_partition_threshold: int = 32,
+        js_direct: bool = True,
+        js_runtime: str = "node",
     ) -> str:
     """Generate the check source code from a JSON intermediate representation."""
 
@@ -2663,6 +2673,7 @@ def ir_compile(
         lang, package=package,
         debug=debug, report=report, comment=comment, predef=predef, relib=relib,
         inline=inline, strcmp=strcmp, byte_order=byte_order,
+        js_direct=js_direct, js_runtime=js_runtime,
         max_strcmp_cset=max_strcmp_cset, regex_opt=regex_opt, unique_opt=unique_opt,
         strcmp_cset_partition_threshold=strcmp_cset_partition_threshold,
     )

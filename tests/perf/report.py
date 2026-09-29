@@ -7,6 +7,7 @@ import sys
 import argparse
 import logging
 import json
+import math
 import numpy as np
 import pandas as pd
 import warnings
@@ -28,7 +29,7 @@ arg("--alpha", "-a", type=float, default=0.05,
 arg("--cache", "-C", default=None,
     help="file to keep statistical tests results")
 arg("--sort", "-s", default="ga", choices=["ab", "bs", "ls", "ga"],
-    help="sort tools by criterion, default is \"bs\"")
+    help="sort tools by criterion (ab=alphabetical, bs=byte speed, ls=line speed, ga=geometrical average), default is \"bs\"")
 arg("--iterations", "-i", type=int, default=0,
     help="expected number of measures for each test case")
 # verbosity control
@@ -42,12 +43,12 @@ arg("--progress", "-p", default=False, action="store_true",
 arg("--hide", default=False, action="store_true",
     help="hide uneffective options from report, default is not")
 arg("--tools", default=".",
-    help="report about these tools, in . * / or [bc123vsyl]+")
+    help="report about these tools, in . * / or [Bc123vsyl]+")
 arg("--unshift", "-u", action="store_true", default=False,
     help="unshift measure overhead estimation from reported measures, default is not")
 arg("--compact", "-c", action="store_true", default=False,
     help="compact but less precise comparison display, default is not")
-arg("--performance", "--perf", "-P", default="best", choices=["best", "blaze", "jmc-c"],
+arg("--performance", "--perf", "-P", default="best", choices=["best", "blaze", "jmc-c", "ajv"],
     help="which tool get the 1.0 performance reference")
 arg("--aggregate", "-g", default="median", choices=["min", "mean", "median"],
     help="choose aggregate function for summarizing performance, default is \"median\"")
@@ -65,6 +66,8 @@ arg("--best", default=True, action="store_true",
     help="show best line in summary")
 arg("--no-best", dest="best", action="store_false",
     help="do not show best line in summary")
+arg("--threshold", type=float, default=0.96,
+    help="minimum rate of passed values")
 args = ap.parse_args()
 
 if args.hide and not args.ref:
@@ -86,27 +89,33 @@ dobetter = args.performance != "best"
 #
 
 TOOL_SHORTCUT: dict[str, str] = {
-    ".": "bc123sy",   # old report
-    "%": "bcvsy",     # new report
-    "*": "bc123syl",  # everything
-    "/": "bcvsyl",    # every once
+    ".": "Bc123sy",   # old report
+    "%": "Bcvsy",     # new report
+    "*": "Bc123syl",  # everything
+    "/": "Bcvsyl",    # every once
 }
 
 if args.tools in TOOL_SHORTCUT:
     args.tools = TOOL_SHORTCUT[args.tools]
 
 # tools to report details
-TOOLS: dict[str, tuple[str, str, str]] = {
-    "b": ("blaze", "blaze", "**blaze** is Sourcemeta Blaze CLI (external reference, in C++)"),
-    "c": ("jmc-c", "c", "**c** is JMC for C"),
-    "v": ("jmc-java-gson", "java", "**java** is JMC for Java with GSON"),
-    "1": ("jmc-java-gson", "jv1", "**jv1** is JMC for Java with GSON"),
-    "2": ("jmc-java-jackson", "jv2", "**jv2** is JMC for Java with Jackson"),
-    "3": ("jmc-java-jsonp", "jv3", "**jv3** is JMC for Java with JSONP"),
-    "s": ("jmc-js", "js", "**js** is JMC for JavaScript"),
-    "y": ("jmc-py", "py", "**py** is JMC for Python"),
-    "l": ("jmc-pl", "pl", "**pl** is JMC for Perl"),
-    "q": ("jmc-sql", "sql", "**sql** is JMC for PL/pgSQL"),
+# task letter -> task, column, compilation, description
+TOOLS: dict[str, tuple[str, str, str, str]] = {
+    # external references
+    "B": ("blaze", "_blaze_", "blaze", "**blaze** is [Sourcemeta Blaze CLI](https://github.com/sourcemeta/jsonschema) (external reference, in C++)"),
+    "A": ("ajv", "_ajv_", "ajv", "**ajv** is [Ajv JSON schema Validator](https://ajv.js.org) (external reference, in JS)"),
+    # JSU model conversion
+    "m": ("jsu", "_model_", "jsu-model", "**model** is JSU schema-to-model conversion"),
+    # JMC stuff
+    "c": ("jmc-c", "c", "jmc-c-out", "**c** is JMC for C"),
+    "v": ("jmc-java-gson", "java", "jmc-java-class", "**java** is JMC for Java with GSON"),
+    "1": ("jmc-java-gson", "jv1", "jmc-java-class", "**jv1** is JMC for Java with GSON"),
+    "2": ("jmc-java-jackson", "jv2", "jmc-java-class", "**jv2** is JMC for Java with Jackson"),
+    "3": ("jmc-java-jsonp", "jv3", "jmc-java-class", "**jv3** is JMC for Java with JSONP"),
+    "s": ("jmc-js", "js", "jmc-js", "**js** is JMC for JavaScript"),  # node or bun or …
+    "y": ("jmc-py", "py", "jmc-py", "**py** is JMC for Python"),
+    "l": ("jmc-pl", "pl", "jmc-pl", "**pl** is JMC for Perl"),
+    "q": ("jmc-sql", "sql", "jmc-sql", "**sql** is JMC for PL/pgSQL"),
 }
 
 TOOL_SUMMARY: str = "\n"
@@ -118,7 +127,7 @@ if args.tools:
     TOOL_SUMMARY += "Tools:\n"
     last_tool = len(args.tools) - 1
     for i, t in enumerate(args.tools):
-        name, col, bla = TOOLS[t]
+        name, col, comp, bla = TOOLS[t]
         report_tools.append(name)
         TOOL_SUMMARY += bla + (".\n" if i == last_tool else ",\n")
         TOOL[name] = col
@@ -129,26 +138,15 @@ if args.tools:
 TOOL_SUMMARY += """
 For each tool:
 maximum/geometrical average/minimum time performance ratio;
-overall validation speed in bytes per µs and lines per µs;
-"""
+overall validation speed in bytes per µs and lines per µs"""
 
 if args.best:
-    TOOL_SUMMARY += "number of best performance;\n"
+    TOOL_SUMMARY += ";\nnumber of best performance"
 
 # FIXME should exist!
 if dobetter:
     assert args.performance in TOOL
-    TOOL_SUMMARY += f"number of better-than-reference (_{TOOL[args.performance]}_) performance;\n"
-
-# TODO do not show unless necessary
-TOOL_SUMMARY += """number of case failures (if any).
-
-The most interesting figure, second row in bold, is the geometrical average of the tool performance.
-Speed measures are biased toward the performance of cases with large values (_geojson_ and _openapi_).
-"""
-
-if args.best:
-    TOOL_SUMMARY += "The best count emphasizes how uniformly better is a tool.\n"
+    TOOL_SUMMARY += f";\nnumber of better-than-reference ({TOOL[args.performance]}) performance"
 
 #
 # cases
@@ -181,41 +179,17 @@ the lower the better, empty denotes a tool failure.
 if args.performance == "best":
     TOOL_CASES += "**1.0** is best.\n"
 else:
-    TOOL_CASES += f"Reference is **1.0** for tool _{TOOL[args.performance]}_.\n"
+    TOOL_CASES += f"Reference is **1.0** for tool {TOOL[args.performance]}.\n"
 
-RESULT_SUCCESS: str = """
-For each tool and cases with a partial success rate, percent of test cases validated.
-"""
-
-# yamllint:{40,58,77,198,238,264,267,458,459,591,680,748,904,905,906,924,953,969}
-RESULT_FIX_COMMENT: str = """
-As of August 2026, the JMC results for `ansible-meta`, `cspell`, `cypress` and `yamllint`
-are not 100.0% because validation checks are stricter and some
-[values](https://github.com/sourcemeta-research/jsonschema-benchmark/pull/155)
-are rightfully rejected.
-
-- ansible-meta:105 - `.depedencies` (typo) unexpected prop (fixed misplaced `additionalProperties`)
-- ansible-meta:{201,312} - `.argument_spec` unexpected prop (idem)
-- cspell:75 - `.languageSettings[2].languageId[0]` is `yaml.ansible`, unexpected `.` in fixed regex
-- cypress:8 - `.reporter` stricter check, file should end with `.js`
-- yamllint:* - 18 unrelated raw strings
-
-Although these different results slightly shorten the checks for the rejected values,
-the overall performance measure is not significantly impacted because of the very few values involved.
-"""
-
-RESULT_CONTENT_COMMENT: str = """
-When running with content validation (aka JSON Schema format or JSON Model predefs),
-a few cases are expected to fail, both for Blaze and JMC:
-
-- helm: - 128 rejected values, mostly because of empty `.dependencies.*.repository` urls
-- openapi:{12,26} - 2 bad urls are rejected
+RESULT_SUCCESS: str = """For each tool and cases with a partial success rate,
+percent of test cases validated.
 """
 
 COMP_CASES: str = """
-For the 3 first lines, max/average/min compilation times in seconds,
-then for each tool and case, compilation time (schema to model
-conversion and language-specific model compilation) in seconds.
+For the 3 first lines, max/average/min compilation times in seconds, then
+for each tool and case, compilation time (external tools,
+separate schema to model conversion, and
+jmc language-specific model compilation) in seconds.
 """
 
 CASE_DATA: str = """
@@ -271,7 +245,7 @@ for t in tools:
         TOOL[t] = t
 
 if args.standard:
-    assert args.tools and "b" in args.tools and "c" in args.tools
+    assert args.tools and "B" in args.tools and "c" in args.tools
 
 # and list of cases
 cases: list[str] = sorted(
@@ -310,8 +284,8 @@ perf_df = pd.read_csv(
 )
 
 # remove unused values (not very efficient)
-if loaded_tools != tools:
-    remove = set(loaded_tools) - set(tools)
+remove = set(loaded_tools) - set(tools)
+if remove:
     log.info(f"removing unneeded data before analysis: {' '.join(sorted(remove))}")
     for t in remove:
         for c in cases:
@@ -322,11 +296,61 @@ if args.unshift:
 
 log.info("analyzing data")
 
-# aggregate performance for each case/tool/line
+# results
+passed = resu_df.groupby(["case", "tool"])["pass"].min()
+failed = resu_df.groupby(["case", "tool"])["fail"].max()
+success_ratio = passed / (passed + failed)
+
+# aggregate performance for each case/tool/line in µs
 perf_aggreg = perf_df.groupby(["case", "tool", "line"])["runavg"].aggregate(args.aggregate)
 
 # total processing time for each case/tool
 perf_total = perf_aggreg.groupby(["case", "tool"]).sum()
+log.info(f"perf_total: {perf_total}")
+
+# check for missing cases
+missings: set[tuple[str, str]] = set()
+for c in cases:
+    for t in tools:
+        try:
+            _ = perf_total[c, t]
+        except KeyError:
+            log.debug(f"missing: {c}, {t}")
+            missings.add((c, t))
+            perf_total[c, t] = np.nan
+
+log.info(f"missings: {missings}")
+
+# which results should be ignored
+bad_result: dict[tuple[str, str], str] = {
+    (c, t): (
+        "missing" if (c, t) in missings else
+        "ntests" if passed[c, t] + failed[c, t] != case_df.loc[c]["ntests"] else
+        "partial" if passed[c, t] <= args.threshold * case_df.loc[c]["ntests"] else
+        "okay"
+    )
+    for c in cases
+        for t in tools
+}
+
+bad_results: dict[tuple[str, str], float] = {
+    ct: val for ct, val in bad_result.items() if val != "okay"
+}
+log.info(f"bad results: {bad_results}")
+
+# cannot compare to a failed result!?
+if args.performance != "best":
+    if any(bad_result[(c, args.performance)] != "okay" for c in cases):
+        log.error(f"failed reference {args.performance}")
+        sys.exit(1)
+
+# fill-on or override missings data
+for (c, t), status in bad_result.items():
+    if status != "okay":
+        perf_total[c, t] = np.nan
+
+for c, t in missings:
+    success_ratio[c, t] = 0.0
 
 # best performance for each case
 perf_best = perf_total.groupby("case").min()
@@ -350,6 +374,9 @@ nbest_tool: dict[str, int] = { t: 0 for t in tools }
 # count how many times tool t is better than the reference
 nbetter_tool: dict[str, int] = { t: 0 for t in tools }
 
+log.info(f"cases: {cases}")
+log.info(f"tools: {tools}")
+log.info(f"perf_best: {perf_best}")
 for c in cases:
     for t in tools:
         if perf_best[c] == perf_total[c, t]:
@@ -359,6 +386,9 @@ for c in cases:
                 nbetter_tool[t] += 1
         if dobetter and perf_total[c, t] < perf_total[c, args.performance]:
             nbetter_tool[t] += 1
+
+log.info(f"best_tool: {best_tool}")
+assert len(best_tool) == len(cases), f"expecting {len(cases)} best tools"
 
 perf_max = perf_rela.groupby("tool").max()
 # geometrical average over all cases
@@ -373,22 +403,30 @@ case_total_lines = case_lines.sum()
 speed_size = case_total_sizes / tool_perf
 speed_lines = case_total_lines / tool_perf
 
-# results
-passed = resu_df.groupby(["case", "tool"])["pass"].min()
-failed = resu_df.groupby(["case", "tool"])["fail"].max()
-success_ratio = passed / (passed + failed)
-
 # for each tool, how many cases were failed
 # nfailed_tool: dict[str, int] = {
 #     t: sum(0 if success_ratio[c, t] == 1.0 else 1 for c in cases)
 #         for t in tools
 # }
-# print(case_df)
-# for each tool, how many cases ware not completed
+
+# for each tool, how many cases were not completed
 nerror_tool: dict[str, int] = {
-    t: sum(1 if passed[c, t] + failed[c, t] != case_df.loc[c]["ntests"] else 0 for c in cases)
-        for t in tools
+    t: sum(1 if bad_result[(c, t)] != "okay" else 0
+        for c in cases)
+            for t in tools
 }
+
+if any(nerror_tool[t] != 0 for t in tools):
+    TOOL_SUMMARY += ";\nnumber of case failures"
+
+TOOL_SUMMARY += """.
+
+The most interesting figure, second row in bold, is the geometrical average of the tool performance.
+Speed measures are biased toward the performance of cases with large values (_geojson_ and _openapi_).
+"""
+
+if args.best:
+    TOOL_SUMMARY += "The best count emphasizes how uniformly better is a tool.\n"
 
 if args.ref:
 
@@ -450,11 +488,17 @@ if args.best:
 if dobetter:
     print("|better count|" + "".join(f"{nbetter_tool[t]}|" for t in tools))
 if any(nerror_tool[t] != 0 for t in tools):
-    print("|bad count|" + "".join(f"{nfailed_tool[t]}|" for t in tools))
+    print("|bad count|" + "".join(f"{nerror_tool[t]}|" for t in tools))
 
 print()
 print("## Tool Performance Per Case")
 if args.standard: print(TOOL_CASES, end="")
+
+perf_display: dict[tuple[str, str], str] = {
+    (c, t): f"{perf_rela[c, t]:.02f}" if not math.isnan(perf_rela[c, t]) else "-"
+        for c in cases
+            for t in tools
+}
 
 print()
 print("|#|name|cases|best µs| :1st_place_medal: |" + "|".join(TOOL[t] for t in tools) + "|")
@@ -462,15 +506,16 @@ print("|---:|:------|---:|---:|:--:|" + "".join("---:|" for t in tools))
 for i, c in enumerate(cases):
     print(f"|{i+1}|{CASE[c]}|{case_df.loc[c]['ntests']}|"
           f"{perf_best[c]:.01f}|{TOOL[best_tool[c]]}|", end="")
-    print("".join(f"{perf_rela[c, t]:.02f}|" for t in tools))
+    print("".join(f"{perf_display[(c, t)]}|" for t in tools))
+
+print()
+print("## Result Success")
+print()
 
 if any(success_ratio[n, t] != 1.0 for t in tools for n in cases):
 
-    print("\n## Result Success")
-
     if args.standard: print(RESULT_SUCCESS, end="")
 
-    print()
     print("|#|name|" + "|".join(TOOL[t] for t in tools) + "|")
     print("|---:|:---|" + "".join("---:|" for t in tools))
     for i, c in enumerate(cases):
@@ -479,24 +524,37 @@ if any(success_ratio[n, t] != 1.0 for t in tools for n in cases):
                 f"|{i+1}|{CASE[c]}|" +
                 "".join(f"{100.0 * success_ratio[c, t]:.01f}|" for t in tools)
             )
-
-    if args.standard and args.fix:
-        print(RESULT_FIX_COMMENT, end="")
-    if args.standard and args.content:
-        print(RESULT_CONTENT_COMMENT, end="")
-
+else:
+    print("All tools validate all values, as expected.")
 
 if args.standard:
 
-    # compilation columns to display and associated labels
-    comp_tool = {
-        "blaze": "blaze",
-        "jsu-model": "model",
-        "jmc-c-out": "c",
-        "jmc-js": "js",
-        "jmc-java-class": "java",
-        "jmc-py": "py",
+    # compilation columns to display and associated order and label
+    comp_tool: dict[str, tuple[int, str]] = {
+        # external stuff
+        "blaze": (0, "_blaze_"),
+        "ajv": (1, "_ajv_"),
+        # JSU/JMC
+        "jsu-model": (2, "_model_"),
+        "jmc-c-out": (3, "c"),
+        "jmc-js": (4, "js"),
+        "jmc-java-class": (5, "java"),
+        "jmc-py": (6, "py"),
+        "jmc-pl": (7, "pl"),
+        "jmc-sql": (8, "sql"),
     }
+
+    # show what is relevant
+    show = set()
+    if set("csv123ylqm") & set(args.tools):
+        show.add("jsu-model")
+    for t in "BAcsv123ylq":
+        if t in args.tools:
+            show.add(TOOLS[t][2])
+    for t in comp_tool.keys() - show:
+        del comp_tool[t]
+
+    comp_tool_order: list[str] = sorted(comp_tool.keys(), key=lambda t: comp_tool[t][0])
 
     print()
     print("## Compilation Times")
@@ -504,20 +562,28 @@ if args.standard:
     if args.standard: print(COMP_CASES, end="")
 
     compilation = comp_df.groupby(["case", "tool"])["run"].aggregate(args.aggregate)
+
+    for (c, t), is_bad in bad_result.items():
+        if is_bad:
+            try:
+                _ = compilation[c, t]
+            except KeyError:
+                compilation[c, t] = np.nan
+
     comp_max = compilation.groupby("tool").max()
     comp_avg = compilation.groupby("tool").mean()
     comp_min = compilation.groupby("tool").min()
 
     print()
-    print("|#|name|" + "".join(f"{comp_tool[t]}|" for t in comp_tool))
-    print("|---:|:---|---:|---:|---:|---:|---:|---:|")
-    print(f"|| _max_ |", "".join(f"{comp_max[t]:.01f}|" for t in comp_tool))
-    print(f"|| _avg_ |", "".join(f"{comp_avg[t]:.01f}|" for t in comp_tool))
-    print(f"|| _min_ |", "".join(f"{comp_min[t]:.01f}|" for t in comp_tool))
+    print("|#|name|" + "".join(f"{comp_tool[t][1]}|" for t in comp_tool_order))
+    print("|---:|:---|" + "---:|" * len(comp_tool))
+    print(f"|| _max_ |", "".join(f"{comp_max[t]:.01f}|" for t in comp_tool_order))
+    print(f"|| _avg_ |", "".join(f"{comp_avg[t]:.01f}|" for t in comp_tool_order))
+    print(f"|| _min_ |", "".join(f"{comp_min[t]:.01f}|" for t in comp_tool_order))
 
     for i, c in enumerate(cases):
         print(f"|{i+1}|{CASE[c]}|" +
-              "".join(f"{compilation[c,t]:.01f}|" for t in comp_tool))
+              "".join(f"{compilation[c,t]:.01f}|" for t in comp_tool_order))
 print()
 print("## Cases Data")
 if args.standard: print(CASE_DATA, end="")
@@ -557,6 +623,9 @@ print(f"|| _summary_ ||||| _{min_vs}_ | _{avg_vs:.0f}_ | _{max_vs}_ |")
 # force flush at end of main sections
 print(end="", flush=True)
 
+#
+# statistical analysis
+#
 if args.ref:
 
     # NOTE this is quite slow

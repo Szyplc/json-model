@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "patternProperties": {
+    "^x": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "additionalProperties": true
+}

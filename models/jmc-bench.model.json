@@ -1,5 +1,6 @@
 {
-  "#": "JMC Benchmark generated radar data",
+  "#": "JMC Benchmark Radar",
+  "#.doc": "datastructure for [JMC Bench](https://json-model.org/BENCH) radar data",
   "#.url": "https://json-model.org/BENCH",
   "$": {
     "": "https://json-model.org/models/jmc-bench",
@@ -12,8 +13,16 @@
       "#.label": "tool name",
       "label": "",
       "#.data": "per-case relative speed",
-      "data": [ "$Perf" ]
+      "data": [ "$Perf" ],
+      "#.speed": "aggregated relative-to-reference speed",
+      "?speed": 0.0
     }
   },
-  "@": [ "$Bench" ]
+  "#.note": "this is a subset of [CharJS](https://www.chartjs.org/) data",
+  "?labels": {
+    "#": "case names",
+    "@": [ "" ],
+    "!": true
+  },
+  "datasets": [ "$Bench" ]
 }

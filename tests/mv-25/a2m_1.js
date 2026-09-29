@@ -24,7 +24,7 @@ function json_model_2(val, path, rep)
     {
         pval = val["a"]
         // .'$Oa'.a
-        res = ((typeof pval === 'number' || pval instanceof Number) && Number.isInteger(pval)) && pval >= 0
+        res = ((typeof pval == 'number' || pval instanceof Number) && Number.isInteger(pval)) && pval >= 0
         if (! res)
             return false
     }
@@ -44,7 +44,7 @@ function json_model_3(val, path, rep)
     {
         pval = val["b"]
         // .'$Ob'.b
-        res = ((typeof pval === 'number' || pval instanceof Number) && Number.isInteger(pval)) && pval >= 0
+        res = ((typeof pval == 'number' || pval instanceof Number) && Number.isInteger(pval)) && pval >= 0
         if (! res)
             return false
     }
@@ -64,7 +64,7 @@ function json_model_4(val, path, rep)
     {
         pval = val["a"]
         // .'$merge'.a
-        res = ((typeof pval === 'number' || pval instanceof Number) && Number.isInteger(pval)) && pval >= 0
+        res = ((typeof pval == 'number' || pval instanceof Number) && Number.isInteger(pval)) && pval >= 0
         if (! res)
             return false
     }
@@ -72,7 +72,7 @@ function json_model_4(val, path, rep)
     {
         pval = val["b"]
         // .'$merge'.b
-        res = ((typeof pval === 'number' || pval instanceof Number) && Number.isInteger(pval)) && pval >= 0
+        res = ((typeof pval == 'number' || pval instanceof Number) && Number.isInteger(pval)) && pval >= 0
         if (! res)
             return false
     }
@@ -93,7 +93,7 @@ function json_model_5(val, path, rep)
         return false
     pval = val["c"]
     // .'$nomerge'.c
-    return ((typeof pval === 'number' || pval instanceof Number) && Number.isInteger(pval)) && pval >= 1
+    return ((typeof pval == 'number' || pval instanceof Number) && Number.isInteger(pval)) && pval >= 1
 }
 
 // check $ (.)

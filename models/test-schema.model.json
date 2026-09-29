@@ -1,9 +1,11 @@
 {
-  "#": "JSON Model for the JSON Schema Test Suite tests",
+  "#": "JSON Model for JSTS tests",
+  "#.doc": "JSON Schema Test Suite tests file format",
+  "#.url": "https://github.com/json-schema-org/JSON-Schema-Test-Suite/tree/main/tests",
   "~": "https://json-model.org/models/json-model",
   "$": {
     "": "https://json-model.org/models/test-schema",
-    "Version": "/^[0-9a-zA-Z]+(\\.[0-9a-zA-Z]+)*$/",
+    "Section": "/^[0-9]+(\\.[0-9]+)*$/",
     "Test": {
       "#": "A single test",
       "description": "",
@@ -13,13 +15,13 @@
     },
     "Specification": {
       "@": {
-        "?core": "$Version",
-        "?validation": "$Version",
-        "?ecma262": "$Version",
+        "?core": { "|": [ "$SEMVER", "$Section" ] },
+        "?validation": "$SEMVER",
+        "?ecma262": "$SEMVER",
         "?perl5": "",
         "?quote": "",
-        "/^rfc\\d+$/": "$Version",
-        "/^iso\\d+$/": "$Version"
+        "/^rfc\\d+$/": "$SEMVER",
+        "/^iso\\d+$/": "$SEMVER"
       },
       ">": 0
     },

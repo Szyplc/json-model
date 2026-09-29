@@ -24,6 +24,9 @@ D.clean.pl = $(D.subs:%=%.clean.pl)
 D.sql = $(D.subs:%=%.sql)
 D.clean.sql = $(D.subs:%=%.clean.sql)
 D.ts = $(D.subs:%=%.ts)
+D.auto.subs = $(filter-out bads,$(D.subs))
+D.auto = $(D.auto.subs:%=%.auto)
+D.clean.auto = $(D.auto.subs:%=%.clean.auto)
 D.clean.ts = $(D.valid:%.ts.valid=%.clean.ts)
 # schema
 D.schema = $(D.subs:%=%.schema)
@@ -38,8 +41,13 @@ clean:
 	$(RM) $(COUNTER).*
 
 LOGLEVEL = info
-PYTEST  = pytest --log-level=$(LOGLEVEL) --capture=tee-sys --durations=10
-PYTOPT	= -n logical
+# keep max scheduled chunk low ge 2 for better balancing
+PYTEST  = pytest --log-level=$(LOGLEVEL) --durations=10 -n logical --maxschedchunk=3
+PYTOPT	=
+
+ifeq ($(LOGLEVEL), debug)
+  PYTOPT += --capture=tee-sys
+endif
 
 .PHONY: check.pytest
 check.pytest:
@@ -132,6 +140,14 @@ schema:
 .PHONY: clean.schema
 clean.schema:
 	$(MAKE) TARGET=clean.schema $(D.clean.schema)
+
+.PHONY: auto
+auto:
+	$(MAKE) TARGET=auto $(D.auto)
+
+.PHONY: clean.auto
+clean.auto:
+	$(MAKE) TARGET=clean.auto $(D.clean.auto)
 
 # show statistics about tests
 .PHONY: stats

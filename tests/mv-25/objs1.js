@@ -92,14 +92,14 @@ function json_model_4(val, path, rep)
         return false
     pval = val["t"]
     // .'$objs0#table'.t
-    let res = ((typeof pval === 'string' || pval instanceof String)) && pval == "table"
+    let res = ((typeof pval == 'string' || pval instanceof String)) && pval == "table"
     if (! res)
         return false
     if (! val.hasOwnProperty("legs"))
         return false
     pval = val["legs"]
     // .'$objs0#table'.legs
-    return ((typeof pval === 'number' || pval instanceof Number) && Number.isInteger(pval)) && pval >= 1
+    return ((typeof pval == 'number' || pval instanceof Number) && Number.isInteger(pval)) && pval >= 1
 }
 
 // check $objs0#chair (.'$objs0#chair')
@@ -116,14 +116,14 @@ function json_model_5(val, path, rep)
         return false
     pval = val["t"]
     // .'$objs0#chair'.t
-    let res = ((typeof pval === 'string' || pval instanceof String)) && pval == "chair"
+    let res = ((typeof pval == 'string' || pval instanceof String)) && pval == "chair"
     if (! res)
         return false
     if (! val.hasOwnProperty("color"))
         return false
     pval = val["color"]
     // .'$objs0#chair'.color
-    return (typeof pval === 'string' || pval instanceof String)
+    return (typeof pval == 'string' || pval instanceof String)
 }
 
 

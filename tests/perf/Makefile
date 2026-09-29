@@ -27,7 +27,7 @@ endif
 
 .PHONY: clean
 clean:
-	$(RM) .*-*-build.* .version
+	$(RM) .*-*-build.* .version .ajv.build ajv/.jmc_version
 	$(RM) -rf jsb/ tmp/
 
 #
@@ -98,6 +98,24 @@ docker-podman.build:
 .PHONY: podman-podman.build
 podman-podman.build:
 	$(MAKE) POD=podman VARIANT=podman build
+
+.PHONY: ajv.build
+ajv.build: .ajv.build
+
+.ajv.build: ajv/ajv.docker ajv/ajv-wrapper.sh
+	echo $(VERSION) > ajv/.jmc_version
+	$(POD) build -t ajv-cli:$(TAG) -f ajv/ajv.docker ajv/.
+	touch $@
+
+.PHONY: ajv.tag
+ajv.tag: ajv.build
+	$(POD) tag ajv-cli:$(TAG) $(ZX80)/ajv-cli:$(BRANCH)
+	$(POD) tag ajv-cli:$(TAG) $(ZX80)/ajv-cli:$(TAG)
+
+.PHONY: ajv.push
+ajv.push: ajv.tag
+	$(POD) push $(ZX80)/ajv-cli:$(TAG)
+	$(POD) push $(ZX80)/ajv-cli:$(BRANCH)
 
 #
 # LOCAL SANITY TESTING

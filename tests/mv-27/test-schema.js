@@ -9,19 +9,20 @@ const require = createRequire(import.meta.url);
 import * as runtime from "json_model_runtime"
 const JSON_MODEL_VERSION = "2";
 
-const _jm_re_0_re = new runtime.RX("^[0-9a-zA-Z]+(\\.[0-9a-zA-Z]+)*$", "")
+const _jm_re_0_re = new runtime.RX("^[0-9]+(\\.[0-9]+)*$", "")
 const _jm_re_1_re = new runtime.RX("^rfc\\d+$", "")
 const _jm_re_2_re = new runtime.RX("^iso\\d+$", "")
 export var check_model_map = new Map()
+const jm_is_semver_re = new runtime.RX("^([0-9]|[1-9][0-9]+)\\.([0-9]|[1-9][0-9]+)\\.([0-9]|[1-9][0-9]+)(-(([0-9]|[1-9][0-9]+)|[-0-9a-zA-Z]*[-a-zA-Z][-0-9a-zA-Z]*)(\\.(([0-9]|[1-9][0-9]+)|[-0-9a-zA-Z]*[-a-zA-Z][-0-9a-zA-Z]*))*)?(\\+(([0-9]|[1-9][0-9]+)|[-0-9a-zA-Z]*[-a-zA-Z][-0-9a-zA-Z]*)(\\.(([0-9]|[1-9][0-9]+)|[-0-9a-zA-Z]*[-a-zA-Z][-0-9a-zA-Z]*))*)?$", "")
 
 const _jm_re_0 = (s) => _jm_re_0_re.exec(s) !== null
 
-// check $Version (.'$Version')
+// check $Section (.'$Section')
 function json_model_2(val, path, rep)
 {
-    // .'$Version'
-    // "/^[0-9a-zA-Z]+(\\.[0-9a-zA-Z]+)*$/"
-    return ((typeof val === 'string' || val instanceof String)) && _jm_re_0(val, null, null)
+    // .'$Section'
+    // "/^[0-9]+(\\.[0-9]+)*$/"
+    return typeof val == 'string' && _jm_re_0(val, null, null)
 }
 
 // check $Test (.'$Test')
@@ -29,7 +30,7 @@ function json_model_3(val, path, rep)
 {
     // A single test
     // .'$Test'
-    if (! (Object.prototype.toString.call(val) === '[object Object]'))
+    if (! (val !== null && typeof val == 'object' && !Array.isArray(val)))
         return false
     let res
     let must_count = 0
@@ -40,7 +41,7 @@ function json_model_3(val, path, rep)
             // handle must description property
             must_count += 1
             // .'$Test'.description
-            res = (typeof pval === 'string' || pval instanceof String)
+            res = typeof pval == 'string'
             if (! res)
                 return false
             continue
@@ -58,7 +59,7 @@ function json_model_3(val, path, rep)
             // handle must valid property
             must_count += 1
             // .'$Test'.valid
-            res = (typeof pval === 'boolean' || pval instanceof Boolean)
+            res = typeof pval == 'boolean'
             if (! res)
                 return false
             continue
@@ -67,7 +68,7 @@ function json_model_3(val, path, rep)
         {
             // handle may comment property
             // .'$Test'.comment
-            res = (typeof pval === 'string' || pval instanceof String)
+            res = typeof pval == 'string'
             if (! res)
                 return false
             continue
@@ -84,7 +85,7 @@ const _jm_re_2 = (s) => _jm_re_2_re.exec(s) !== null
 // object .'$Specification'.'@'
 function _jm_obj_0(val, path, rep)
 {
-    if (! (Object.prototype.toString.call(val) === '[object Object]'))
+    if (! (val !== null && typeof val == 'object' && !Array.isArray(val)))
         return false
     let res
     for (const [prop, pval] of Object.entries(val))
@@ -93,7 +94,9 @@ function _jm_obj_0(val, path, rep)
         {
             // handle may core property
             // .'$Specification'.'@'.core
-            res = json_model_2(pval, null, null)
+            // .'$Specification'.'@'.core.'|'.0
+            // .'$Specification'.'@'.core.'|'.1
+            res = typeof pval == 'string' && jm_is_semver(pval, null, null) || json_model_2(pval, null, null)
             if (! res)
                 return false
             continue
@@ -102,7 +105,7 @@ function _jm_obj_0(val, path, rep)
         {
             // handle may validation property
             // .'$Specification'.'@'.validation
-            res = json_model_2(pval, null, null)
+            res = typeof pval == 'string' && jm_is_semver(pval, null, null)
             if (! res)
                 return false
             continue
@@ -111,7 +114,7 @@ function _jm_obj_0(val, path, rep)
         {
             // handle may ecma262 property
             // .'$Specification'.'@'.ecma262
-            res = json_model_2(pval, null, null)
+            res = typeof pval == 'string' && jm_is_semver(pval, null, null)
             if (! res)
                 return false
             continue
@@ -120,7 +123,7 @@ function _jm_obj_0(val, path, rep)
         {
             // handle may perl5 property
             // .'$Specification'.'@'.perl5
-            res = (typeof pval === 'string' || pval instanceof String)
+            res = typeof pval == 'string'
             if (! res)
                 return false
             continue
@@ -129,7 +132,7 @@ function _jm_obj_0(val, path, rep)
         {
             // handle may quote property
             // .'$Specification'.'@'.quote
-            res = (typeof pval === 'string' || pval instanceof String)
+            res = typeof pval == 'string'
             if (! res)
                 return false
             continue
@@ -138,7 +141,7 @@ function _jm_obj_0(val, path, rep)
         {
             // handle 2 re props
             // .'$Specification'.'@'.'/^rfc\\d+$/'
-            res = json_model_2(pval, null, null)
+            res = typeof pval == 'string' && jm_is_semver(pval, null, null)
             if (! res)
                 return false
         }
@@ -146,7 +149,7 @@ function _jm_obj_0(val, path, rep)
         {
             // handle 2 re props
             // .'$Specification'.'@'.'/^iso\\d+$/'
-            res = json_model_2(pval, null, null)
+            res = typeof pval == 'string' && jm_is_semver(pval, null, null)
             if (! res)
                 return false
         }
@@ -174,7 +177,7 @@ function json_model_4(val, path, rep)
 function json_model_5(val, path, rep)
 {
     // .'$TestCase'
-    if (! (Object.prototype.toString.call(val) === '[object Object]'))
+    if (! (val !== null && typeof val == 'object' && !Array.isArray(val)))
         return false
     let res
     let must_count = 0
@@ -185,7 +188,7 @@ function json_model_5(val, path, rep)
             // handle must description property
             must_count += 1
             // .'$TestCase'.description
-            res = (typeof pval === 'string' || pval instanceof String)
+            res = typeof pval == 'string'
             if (! res)
                 return false
             continue
@@ -229,7 +232,7 @@ function json_model_5(val, path, rep)
         {
             // handle may comment property
             // .'$TestCase'.comment
-            res = (typeof pval === 'string' || pval instanceof String)
+            res = typeof pval == 'string'
             if (! res)
                 return false
             continue
@@ -268,7 +271,7 @@ function json_model_5(val, path, rep)
 // check $ (.)
 function json_model_1(val, path, rep)
 {
-    // JSON Model for the JSON Schema Test Suite tests
+    // JSON Model for JSTS tests
     // .
     // .'@'
     let res = Array.isArray(val)
@@ -292,6 +295,8 @@ function json_model_1(val, path, rep)
 }
 
 
+const jm_is_semver = (s) => jm_is_semver_re.exec(s) !== null
+
 var initialized = false
 
 // differed module initializations
@@ -302,7 +307,7 @@ export function check_model_init()
         initialized = true;
         runtime.jm_set_rx(RegExp)
         check_model_map.set("", json_model_1)
-        check_model_map.set("Version", json_model_2)
+        check_model_map.set("Section", json_model_2)
         check_model_map.set("Test", json_model_3)
         check_model_map.set("Specification", json_model_4)
         check_model_map.set("TestCase", json_model_5)

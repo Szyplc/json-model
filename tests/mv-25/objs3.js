@@ -25,14 +25,14 @@ function json_model_2(val, path, rep)
         return false
     pval = val["title"]
     // .'$book'.title
-    let res = (typeof pval === 'string' || pval instanceof String)
+    let res = (typeof pval == 'string' || pval instanceof String)
     if (! res)
         return false
     if (! val.hasOwnProperty("author"))
         return false
     pval = val["author"]
     // .'$book'.author
-    return (typeof pval === 'string' || pval instanceof String)
+    return (typeof pval == 'string' || pval instanceof String)
 }
 
 // check $ (.)

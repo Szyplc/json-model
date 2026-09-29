@@ -104,6 +104,10 @@ Accept JSON with objects containing duplicated properties.
 
 Allow some extensions to help with JSU back-end implementation.
 
+=item B<--caps> or B<--no-caps>
+
+Reject (the default) or accept all-caps definitions.
+
 =item B<--from-ir>/B<-fir>
 
 Read a JSON intermediate representation, as generated with C<-C -F json>, instead of a
@@ -328,6 +332,22 @@ Java compiler.
 =item B<--jflags JFLAGS>
 
 Java compiler flags.
+
+=back
+
+=head2 JavaScript Compilation
+
+=over 4
+
+=item B<--js-runtime JS>
+
+Set JavaScript runtime for generated executable, eg C<bun>.
+Skip with C<none>.
+Default is C<node>.
+
+=item B<--js-direct> or B<--no-js-direct>
+
+Use more direct operations in generated JS code.
 
 =back
 

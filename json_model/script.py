@@ -17,6 +17,7 @@ from .resolver import Resolver
 from .model import JsonModel
 from .xstatic import xstatic_compile, ir_compile
 from . import optim, analyze, objops
+from .values import vectors, UnsupportedValue
 from .runtime.types import EntryCheckFun, Report
 from .runtime.support import _path as json_path
 from .export import model2python
@@ -33,9 +34,11 @@ LANG = {
   "json": "IR",
 }
 
-def process_model(model: JsonModel, *,
-                  check: bool = True, merge: bool = True, optimize: bool = True,
-                  disabled_optims: list[str] = [], extend: bool = False, debug: int = 0):
+def process_model(
+            model: JsonModel, *,
+            check: bool = True, merge: bool = True, optimize: bool = True,
+            disabled_optims: list[str] = [], extend: bool = False, caps: bool = True,
+            debug: int = 0):
     """Apply necessary preprocessing to JsonModel."""
 
     # initial sanity check
@@ -48,7 +51,7 @@ def process_model(model: JsonModel, *,
 
     if debug or check:
         for m in all_models:
-            if not analyze.valid(m, extend=extend):
+            if not analyze.valid(m, extend=extend, caps=caps):
                 raise ModelError(f"invalid initial model {m._url}:{m._id}")
 
     # simplify before merging
@@ -60,7 +63,7 @@ def process_model(model: JsonModel, *,
     if debug or check:
         # log.debug(json.dumps(model.toJSON(), sort_keys=True, indent=2))
         for m in all_models:
-            if not analyze.valid(m, extend=extend):
+            if not analyze.valid(m, extend=extend, caps=caps):
                 raise ModelError(f"invalid optimized model {m._url}:{m._id}")
 
     # merge in reverse order to move alts up before inlining?!
@@ -76,7 +79,7 @@ def process_model(model: JsonModel, *,
     # check after merge & optimize
     if debug or check:
         for m in all_models:
-            if not analyze.valid(m, extend=extend):
+            if not analyze.valid(m, extend=extend, caps=caps):
                 raise ModelError(f"invalid merged model {m._url}:{m._id}")
 
 
@@ -88,7 +91,7 @@ def model_from_json(
             loose_int: bool|None = None, loose_float: bool|None = None,
             # processing stuff
             check: bool = True, merge: bool = True, optimize: bool = True,
-            extend: bool = False, disabled_optims: list[str] = [],
+            extend: bool = False, caps: bool = True, disabled_optims: list[str] = [],
         ) -> JsonModel:
     """JsonModel instanciation from JSON data."""
 
@@ -117,7 +120,7 @@ def model_from_json(
     if check or merge or optimize or extend:
         process_model(
             jm, debug=debug, extend=extend, check=check, merge=merge,
-            optimize=optimize, disabled_optims=disabled_optims,
+            optimize=optimize, disabled_optims=disabled_optims, caps=caps,
         )
 
     return jm
@@ -148,8 +151,8 @@ def model_from_str(
     return model_from_json(json_loads(mstring, allow_duplicates=allow_duplicates), **kwargs)
 
 
-# it is unclear if this tricks actually works
 def _model_checker(jm: JsonModel, *, debug: bool = False, **options):
+    """Return the python checker function for the model."""
     code = xstatic_compile(jm, lang="py", debug=debug, **options)
     env = {}
     exec(str(code), env)
@@ -166,13 +169,14 @@ def model_checker(jm: JsonModel, *, debug: bool = False, **options) -> EntryChec
 def model_checker_from_json(
         mjson: Jsonable, *, auto: bool = False, debug: int = 0,
         resolver: Resolver|None = None, single_line: bool = False,
-        loose_int: bool|None = None, loose_float: bool|None = None, extend: bool = False,
+        loose_int: bool|None = None, loose_float: bool|None = None,
+        extend: bool = False, caps: bool = True,
         **options,
     ) -> EntryCheckFun:
     """Return an executable model checker from a URL."""
     jm = model_from_json(
         mjson, auto=auto, debug=debug, resolver=resolver, single_line=single_line,
-        loose_int=loose_int, loose_float=loose_float, extend=extend
+        loose_int=loose_int, loose_float=loose_float, extend=extend, caps=caps,
     )
     return model_checker(jm, debug=debug > 0, **options)
 
@@ -181,12 +185,14 @@ def model_checker_from_url(
         murl: str, *, auto: bool = False, debug: int = 0,
         resolver: Resolver|None = None, follow: bool = True, single_line: bool = False,
         loose_int: bool|None = None, loose_float: bool|None = None, extend: bool = False,
+        caps: bool = True,
         **options,
     ) -> EntryCheckFun:
     """Return an executable model checker from a URL."""
     jm = model_from_url(
         murl, auto=auto, debug=debug, resolver=resolver, follow=follow,
-        loose_int=loose_int, loose_float=loose_float, extend=extend, single_line=single_line,
+        loose_int=loose_int, loose_float=loose_float, extend=extend,
+        caps=caps, single_line=single_line,
     )
     return model_checker(jm, debug=debug > 0, **options)
 
@@ -196,13 +202,13 @@ def create_model(
             auto: bool = False, follow: bool = True, debug: int = 0,
             check: bool = True, merge: bool = True, optimize: bool = True,
             loose_int: bool|None = None, loose_float: bool|None = None,
-            extend: bool = False, single_line: bool = False
+            extend: bool = False, caps: bool = True, single_line: bool = False
         ) -> JsonModel:
     """JsonModel instanciation without preprocessing."""
     return model_from_url(
         murl, auto=auto, follow=follow, debug=debug, resolver=resolver,
         loose_int=loose_int, loose_float=loose_float, single_line=single_line,
-        check=check, merge=merge, optimize=optimize, extend=extend
+        check=check, merge=merge, optimize=optimize, extend=extend, caps=caps,
     )
 
 
@@ -328,6 +334,404 @@ def java_compile(java_code: str, args):
 # Compiler entry point
 #
 
+def _vector_key(value: Jsonable) -> str:
+    """Comparison key of a test vector value."""
+    return json.dumps(value, sort_keys=True)
+
+def _read_vectors(path: str, what: str, optional: bool = False) -> list|None:
+    """Test vectors held by a file, None if the file cannot be used."""
+    if optional and not os.path.isfile(path):
+        return None
+    try:
+        with open(path, newline="") as f:
+            vectors = json.load(f)
+    except (OSError, ValueError) as e:
+        log.error(f"{path}: {what} unreadable, {e}")
+        return None
+    if not isinstance(vectors, list):
+        log.error(f"{path}: {what} are not an array")
+        return None
+    return vectors
+
+def _values_held(values: list) -> dict[str, tuple[int, int|None, Jsonable]]:
+    """Ordinal, array index (none if named) and stated result of each held value."""
+    held: dict[str, tuple[int, int|None, Jsonable]] = {}
+    ordinal = 0
+    for index, entry in enumerate(values):
+        if isinstance(entry, list) and len(entry) in (2, 3):
+            index = index if len(entry) == 2 else None  # pyright: ignore
+            held.setdefault(_vector_key(entry[-1]), (ordinal, index, entry[0]))
+            ordinal += 1
+    return held
+
+def _values_items(text: str) -> list[tuple[Jsonable, int, int]]:
+    """List (value, start, end) triples for the items of a JSON array source."""
+    dec, items = json.JSONDecoder(), []
+    i, n = text.index("[") + 1, len(text)
+    while i < n:
+        while i < n and text[i].isspace():
+            i += 1
+        if i >= n or text[i] == "]":
+            break
+        value, end = dec.raw_decode(text, i)
+        items.append((value, i, end))
+        i = end
+        while i < n and text[i].isspace():
+            i += 1
+        if i < n and text[i] == ",":
+            i += 1
+    return items
+
+def _values_orphans(items: list[tuple[Jsonable, int, int]], dropped: set[int]) -> set[int]:
+    """Comment items whose whole section of test vectors is dropped."""
+    orphans, comment, seen, gone = set(), None, 0, 0
+    for i, (value, _, _) in enumerate(items):
+        if isinstance(value, str):
+            if comment is not None and seen > 0 and seen == gone:
+                orphans.add(comment)
+            comment, seen, gone = i, 0, 0
+        elif isinstance(value, list):
+            seen += 1
+            if i in dropped:
+                gone += 1
+    if comment is not None and seen > 0 and seen == gone:
+        orphans.add(comment)
+    return orphans
+
+def _values_splice(text: str, items: list[tuple[Jsonable, int, int]], dropped: set[int]) -> str:
+    """Rebuild an array source without the dropped items, keeping its layout."""
+    kept = [i for i in range(len(items)) if i not in dropped]
+    if not kept:
+        return text[:text.index("[")] + "[]" + text[text.rindex("]") + 1:]
+    parts = [text[:items[0][1]]]
+    for rank, i in enumerate(kept):
+        parts.append(text[items[i][1]:items[i][2]])
+        if rank + 1 < len(kept):
+            parts.append(text[items[i][2]:items[i + 1][1]])
+    parts.append(text[items[-1][2]:])
+    return "".join(parts)
+
+def _write_values(path: str, dropped: set[int], added: list) -> None:
+    """Remove generated test vectors from a values file and add unsettled ones."""
+    with open(path, newline="") as f:
+        text = f.read()
+    eol = "\r\n" if "\r\n" in text else "\n"
+    if dropped:
+        items = _values_items(text)
+        text = _values_splice(text, items, dropped | _values_orphans(items, dropped))
+    if added:
+        close = text.rindex("]")
+        head, tail = text[:close].rstrip(), text[close:]
+        lines = ("," + eol).join(f"  [ null, {json.dumps(value)} ]" for value in added)
+        sep = eol if head.endswith("[") else "," + eol
+        text = head + sep + lines + eol + tail
+    with open(path, "w", newline="") as f:
+        f.write(text)
+
+_VALUES_SUFFIX = ".values.json"
+_ERRORS_SUFFIX = ".errors.json"
+_ERRORS_SOURCES = ("values", "auto")
+
+def _errors_path(path: str|None, errors_file: str|None = None) -> str|None:
+    """Path of the expected errors file of a values file, if any."""
+    if errors_file is not None:
+        return errors_file
+    if path is None or not path.endswith(_VALUES_SUFFIX):
+        return None
+    return path[:-len(_VALUES_SUFFIX)] + _ERRORS_SUFFIX
+
+def _values_shift(values: list, removed: set[int]) -> dict[int, int]:
+    """New position of each test vector a values file keeps."""
+    shift, ordinal, new = {}, 0, 0
+    for entry in values:
+        if isinstance(entry, list) and len(entry) in (2, 3):
+            if ordinal not in removed:
+                shift[ordinal] = new
+                new += 1
+            ordinal += 1
+    return shift
+
+def _auto_shift(previous: list, current: list) -> dict[int, int]:
+    """New position of each test vector both generated vector files hold."""
+    positions: dict[str, list[int]] = {}
+    ordinal = 0
+    for entry in current:
+        if isinstance(entry, list) and len(entry) in (2, 3):
+            positions.setdefault(_vector_key(entry[-1]), []).append(ordinal)
+            ordinal += 1
+    shift, ordinal = {}, 0
+    for entry in previous:
+        if isinstance(entry, list) and len(entry) in (2, 3):
+            same = positions.get(_vector_key(entry[-1]))
+            if same:
+                shift[ordinal] = same.pop(0)
+            ordinal += 1
+    return shift
+
+def _errors_members(text: str, base: int = 0) -> list[tuple[str, Jsonable, int, int, int]]:
+    """List (name, value, name start, value start, value end) tuples of a JSON object source."""
+    dec, members = json.JSONDecoder(), []
+    i, n = text.index("{", base) + 1, len(text)
+    while i < n:
+        while i < n and text[i].isspace():
+            i += 1
+        if i >= n or text[i] == "}":
+            break
+        nstart = i
+        name, i = dec.raw_decode(text, i)
+        while i < n and text[i] != ":":
+            i += 1
+        i += 1
+        while i < n and text[i].isspace():
+            i += 1
+        value, end = dec.raw_decode(text, i)
+        members.append((name, value, nstart, i, end))
+        i = end
+        while i < n and text[i].isspace():
+            i += 1
+        if i < n and text[i] == ",":
+            i += 1
+    return members
+
+def _errors_close(text: str, base: int) -> int:
+    """Position of the closing brace of a JSON object source."""
+    members = _errors_members(text, base)
+    i = members[-1][4] if members else text.index("{", base) + 1
+    while text[i] != "}":
+        i += 1
+    return i
+
+def _errors_gap(text: str, base: int) -> str:
+    """Whitespace which introduces a member of a JSON object source."""
+    members = _errors_members(text, base)
+    start = members[0][2] if members else _errors_close(text, base)
+    return text[text.index("{", base) + 1:start] or " "
+
+def _errors_indexes(value: Jsonable) -> bool:
+    """Whether a member value is a plain list of test vector indexes."""
+    return isinstance(value, list) and \
+        all(isinstance(i, int) and not isinstance(i, bool) for i in value)
+
+def _errors_render(source: str, indexes: list[int]) -> str:
+    """Render an index list following the bracket spacing of its source."""
+    if not indexes:
+        return "[]"
+    inner = ", ".join(str(i) for i in indexes)
+    return f"[ {inner} ]" if source.startswith("[ ") else f"[{inner}]"
+
+def _errors_added(text: str, base: int|None,
+                  gained: dict[str, tuple[list[int], str]]) -> tuple[int, int, str]:
+    """Edit adding index lists at the end of an errors object source, keeping its layout."""
+    members = [f"{json.dumps(name)}: {_errors_render(style, sorted(set(indexes)))}"
+               for name, (indexes, style) in gained.items()]
+    if base is None:
+        members = ["\"auto\": { " + ", ".join(members) + " }"]
+        base = 0
+    close = _errors_close(text, base)
+    head = text[:close].rstrip()
+    gap, lead = _errors_gap(text, base), "" if head.endswith("{") else ","
+    added = "".join(f"{lead if rank == 0 else ','}{gap}{m}" for rank, m in enumerate(members))
+    return (len(head), close, added + text[len(head):close])
+
+def _errors_drop_members(text: str, base: int, to_drop: set[str]) -> str:
+    """Remove named members from a JSON object in source text, preserving layout."""
+    members = _errors_members(text, base)
+    if not any(name in to_drop for name, *_ in members):
+        return text
+    obj_start = text.index("{", base)
+    close = _errors_close(text, base)
+
+    entries: list[tuple[str, str, int, bool]] = []
+    prev_end = obj_start + 1
+    for name, _, nstart, _vstart, vend in members:
+        prefix = text[prev_end:nstart]
+        raw = text[nstart:vend]
+        keep = name not in to_drop
+        entries.append((prefix, raw, vend, keep))
+        j = vend
+        n = len(text)
+        while j < n and text[j].isspace():
+            j += 1
+        if j < n and text[j] == ",":
+            j += 1
+        prev_end = j
+
+    kept = [(prefix, raw, vend) for prefix, raw, vend, keep in entries if keep]
+    if not kept:
+        return text[:obj_start + 1] + text[close:]
+
+    result = text[:obj_start + 1]
+    for idx, (prefix, raw, _vend) in enumerate(kept):
+        if idx == 0:
+            result += prefix + raw
+        else:
+            result += "," + prefix + raw
+
+    last_member_vend = members[-1][4]
+    result += text[last_member_vend:close] + text[close:]
+    return result
+
+def _errors_cleanup_empty(text: str) -> tuple[str, int]:
+    """Remove empty index-list members (and empty parent sections) from an errors file source."""
+    removals = 0
+    for section in _ERRORS_SOURCES:
+        try:
+            top_members = _errors_members(text)
+        except (ValueError, IndexError):
+            break
+        section_entry = next(
+            ((name, value, nstart, start, end)
+             for name, value, nstart, start, end in top_members
+             if name == section and isinstance(value, dict)),
+            None
+        )
+        if section_entry is None:
+            continue
+        _, _, sec_nstart, sec_vstart, _ = section_entry
+        try:
+            inner = _errors_members(text, sec_vstart - 1)
+        except (ValueError, IndexError):
+            continue
+        empty_names = {
+            name for name, value, _, _, _ in inner
+            if not name.startswith("#") and _errors_indexes(value) and len(value) == 0
+        }
+        if not empty_names:
+            continue
+        removals += len(empty_names)
+        text = _errors_drop_members(text, sec_vstart - 1, empty_names)
+        try:
+            top_members2 = _errors_members(text)
+        except (ValueError, IndexError):
+            break
+        section_entry2 = next(
+            ((name, value, nstart2, start2, end2)
+             for name, value, nstart2, start2, end2 in top_members2
+             if name == section),
+            None
+        )
+        if section_entry2 is None:
+            continue
+        _, value2, _, _, _ = section_entry2
+        if isinstance(value2, dict) and len(value2) == 0:
+            removals += 1
+            text = _errors_drop_members(text, 0, {section})
+    return text, removals
+
+def _renumber_errors(path: str, vshift: dict[int, int], ashift: dict[int, int]|None,
+                     moved: dict[int, int], errors_file: str|None = None) -> None:
+    """Move the test vector indexes of the errors file beside a values file."""
+    epath = _errors_path(path, errors_file)
+    if epath is None or not os.path.isfile(epath):
+        return
+    try:
+        with open(epath, newline="") as f:
+            text = f.read()
+        errors = json.loads(text)
+    except (OSError, ValueError) as e:
+        log.error(f"{epath}: expected errors ignored, {e}")
+        return
+    if not isinstance(errors, dict):
+        log.error(f"{epath}: expected errors ignored, not an object")
+        return
+    starts = {name: start for name, value, _, start, _ in _errors_members(text)
+              if name in _ERRORS_SOURCES and isinstance(value, dict)}
+    edits: list[tuple[int, int, str]] = []
+    gained: dict[str, tuple[list[int], str]] = {}
+    if "values" in starts:
+        for name, value, _, start, end in _errors_members(text, starts["values"]):
+            if name.startswith("#") or not _errors_indexes(value):
+                continue
+            for i in value:
+                if i in vshift:
+                    continue
+                if i in moved:
+                    gained.setdefault(name, ([], text[start:end]))[0].append(moved[i])
+                else:
+                    log.warning(f"{epath} [values.{name}]: index {i} dropped, "
+                                "no such test vector")
+            kept = [vshift[i] for i in value if i in vshift]
+            if kept != value:
+                edits.append((start, end, _errors_render(text[start:end], kept)))
+    if "auto" in starts:
+        for name, value, _, start, end in _errors_members(text, starts["auto"]):
+            if name.startswith("#") or not _errors_indexes(value):
+                continue
+            kept = value
+            if ashift is not None:
+                for i in value:
+                    if i not in ashift:
+                        log.warning(f"{epath} [auto.{name}]: index {i} dropped, "
+                                    "its value is not generated anymore")
+                kept = [ashift[i] for i in value if i in ashift]
+            if name in gained:
+                kept = sorted(set(kept) | set(gained.pop(name)[0]))
+            if kept != value:
+                edits.append((start, end, _errors_render(text[start:end], kept)))
+    if gained and "auto" in errors and "auto" not in starts:
+        log.error(f"{epath}: moved errors dropped, auto is not an object")
+    elif gained:
+        edits.append(_errors_added(text, starts.get("auto"), gained))
+    if edits:
+        for start, end, rendered in sorted(edits, reverse=True):
+            text = text[:start] + rendered + text[end:]
+    text, cleaned = _errors_cleanup_empty(text)
+    if not edits and not cleaned:
+        return
+    with open(epath, "w", newline="") as f:
+        f.write(text)
+    parts = []
+    if edits:
+        parts.append(f"{len(edits)} expected error list(s) updated")
+    if cleaned:
+        parts.append(f"{cleaned} empty member(s) removed")
+    log.warning(f"{epath}: {', '.join(parts)}")
+
+def _merge_values(tests: list, path: str, values: list, auto: list|None = None,
+                  errors_file: str|None = None) -> list:
+    """Test vectors to generate, those still waiting for a verdict left to a values file."""
+    held = _values_held(values)
+    kept: list = []
+    added: list = []
+    seen: set[str] = set()
+    dropped: set[int] = set()
+    removed: list[int] = []
+    moved: dict[int, int] = {}
+    generated = 0
+    for item in tests:
+        if isinstance(item, str):
+            kept.append(item)
+            continue
+        expect, value = item
+        key = _vector_key(value)
+        if expect is None:
+            if key not in held and key not in seen:
+                seen.add(key)
+                added.append(value)
+            if kept and isinstance(kept[-1], str):
+                kept[-1] = f"{kept[-1]} REDUNDANT"
+            continue
+        kept.append(item)
+        vector = generated
+        generated += 1
+        if key not in held:
+            continue
+        ordinal, index, stated = held[key]
+        if index is not None and stated == expect:
+            dropped.add(index)
+            removed.append(ordinal)
+            moved[ordinal] = vector
+    if added or dropped:
+        _write_values(path, dropped, added)
+    if added:
+        log.warning(f"{path}: {len(added)} value(s) added with a null result, set them")
+    if removed:
+        log.warning(f"{path}: {len(removed)} value(s) removed, now generated: {sorted(removed)}")
+    _renumber_errors(path, _values_shift(values, set(removed)),
+                     _auto_shift(auto, kept) if auto is not None else None, moved,
+                     errors_file)
+    return kept
+
 def jmc_script(xargs: list[str]|None = None) -> int:
 
     if not xargs:
@@ -368,11 +772,13 @@ def jmc_script(xargs: list[str]|None = None) -> int:
     grp = ap.add_argument_group("Model input")
     arg = grp.add_argument
     arg("--allow-duplicates", "-ad", action="store_true", default=False,
-        help="allow duplicated properties in parsed model, probably a bad idea.""")
+        help="allow duplicated properties in parsed model, probably a bad idea.")
     arg("--maps", "-m", action="append", default=[], help="URL mappings")
     arg("--auto", "-a", action="store_true", help="automatic URL mapping")
     arg("--extend", default=False, action="store_true", help="allow some extensions")
     arg("--no-extend", dest="extend", action="store_false", help="do not allow some extensions")
+    arg("--caps", action="store_true", default=True, help="reject all-caps defs")
+    arg("--no-caps", dest="caps", action="store_false", help="accept all-caps defs")
     arg("--from-ir", "-fir", action="store_true", default=False,
         help="input is a JSON IR file instead of a JSON model")
 
@@ -432,7 +838,7 @@ def jmc_script(xargs: list[str]|None = None) -> int:
         default=None, help="output language")
 
     # C-specific options
-    grp = ap.add_argument_group("C compiler options")
+    grp = ap.add_argument_group("C options")
     arg = grp.add_argument
     arg("--cc", type=str, help="override default C language compiler")
     arg("--cflags", type=str, help="override C compiler flags")
@@ -447,11 +853,19 @@ def jmc_script(xargs: list[str]|None = None) -> int:
     arg("--precompiled", action="store_true", default=False, help="use precompiled C runtime")
     arg("--no-precompiled", dest="precompiled", action="store_false", help="do not use precompiled C runtime")
 
-    # TODO java-specific options
-    grp = ap.add_argument_group("Java compiler options")
+    grp = ap.add_argument_group("Java options")
     arg = grp.add_argument
     arg("--javac", type=str, help="override default Java language compiler")
     arg("--jflags", type=str, help="add Java compiler flags")
+
+    grp = ap.add_argument_group("JavaScript options")
+    arg = grp.add_argument
+    arg("--js-runtime", type=str, default="node",
+        help="javascript runtime for generated executable, default is node, none to skip")
+    arg("--js-direct", action="store_true", default=True,
+        help="use more direct operations in JS")
+    arg("--no-js-direct", dest="js_direct", action="store_false",
+        help="do not use direct operations in JS")
 
     # testing mode, expected results on values
     grp = ap.add_argument_group("Testing")
@@ -465,6 +879,11 @@ def jmc_script(xargs: list[str]|None = None) -> int:
         help="test values for false")
     arg("--test-vector", "-tv", action="store_true", default=False,
         help="read values from a test vector file")
+    arg("--values", dest="values_file", type=str,
+        help="test values file to read and update")
+    arg("--errors", dest="errors_file", type=str, default=None,
+        help="errors file to update (default: derived from --values file by replacing"
+             " .values.json with .errors.json)")
     arg("--jsonl", "-j", action="store_true", default=False,
         help="accept value file in JSONL format")
     arg("--yaml", action="store_true", default=None,
@@ -475,7 +894,7 @@ def jmc_script(xargs: list[str]|None = None) -> int:
     arg("--no-report", "-nr", dest="report", action="store_false",
         help="fast mode, do not give reasons")
 
-    # cheecks and optimizations on model (preprocessor)
+    # checks and optimizations on model (preprocessor)
     grp = ap.add_argument_group("Optimizations")
     arg = grp.add_argument
     arg("--check", "-c", action="store_true", default=False, help="check model validity")
@@ -575,7 +994,7 @@ def jmc_script(xargs: list[str]|None = None) -> int:
     grp = ap.add_argument_group("Operation")
     operation = grp.add_mutually_exclusive_group()
     ope = operation.add_argument
-    ope("--op", choices=["P", "U", "J", "N", "E", "C"], default=None,
+    ope("--op", choices=["P", "U", "J", "N", "E", "C", "A"], default=None,
         help="select operation")
     ope("--preproc", "-P", dest="op", action="store_const", const="P",
         help="preprocess model")
@@ -589,6 +1008,8 @@ def jmc_script(xargs: list[str]|None = None) -> int:
         help="export as JSON Schema")
     ope("--compile", "-C", dest="op", action="store_const", const="C",
         help="code generation")
+    ope("--auto-values", dest="op", action="store_const", const="A",
+        help="generate a test vector file")
 
     # export control
     grp = ap.add_argument_group("Export")
@@ -648,6 +1069,29 @@ def jmc_script(xargs: list[str]|None = None) -> int:
 
     if args.from_ir:
         args.op = args.op or "C"
+
+    if args.errors_file is not None:
+        if args.values_file is None:
+            log.error("--errors requires --values")
+            return 1
+        if not os.path.isfile(args.errors_file):
+            log.warning(f"{args.errors_file}: no such errors file")
+
+    test_values, auto_values = None, None
+    if args.values_file is not None:
+        args.op = args.op or "A"
+        if args.op != "A":
+            log.error(f"--values requires generating test vectors: {args.op}")
+            return 1
+        if args.output != "-" and \
+                os.path.abspath(args.output) == os.path.abspath(args.values_file):
+            log.error(f"--values file is the output file: {args.values_file}")
+            return 1
+        test_values = _read_vectors(args.values_file, "test values")
+        if test_values is None:
+            return 1
+        if args.output != "-":
+            auto_values = _read_vectors(args.output, "generated test vectors", True)
 
     # format/operation/gen guessing
     if args.output != "-":
@@ -715,6 +1159,9 @@ def jmc_script(xargs: list[str]|None = None) -> int:
         elif args.output.endswith(".ir.json"):
             args.format = args.format or "json"
             args.op = args.op or "C"
+        elif args.output.endswith(".auto.json"):
+            args.format = args.format or "json"
+            args.op = args.op or "A"
         elif args.output.endswith(".json"):
             args.format = args.format or "json"
             args.op = args.op or "U"
@@ -744,7 +1191,7 @@ def jmc_script(xargs: list[str]|None = None) -> int:
         return 1
 
     # option/parameter consistency and defaults
-    if args.op in "PUJN":
+    if args.op in "PUJNA":
         args.format = args.format or "json"
         if args.format not in ("json", "yaml"):
             log.error(f"unexpected format {args.format} for operation {args.op}")
@@ -845,7 +1292,7 @@ def jmc_script(xargs: list[str]|None = None) -> int:
                 args.model, resolver, auto=args.auto, debug=args.debug,
                 loose_int=args.loose_int, loose_float=args.loose_float,
                 check=args.check, merge=args.op != "N", single_line=args.single_line_regex,
-                optimize=args.optimize, extend=args.extend, follow=False
+                optimize=args.optimize, extend=args.extend, caps=args.caps, follow=False
             )
         except Exception as e:
             log.error(e)
@@ -872,6 +1319,21 @@ def jmc_script(xargs: list[str]|None = None) -> int:
         else:
             return yaml.dump(j, sort_keys=args.sort, indent=args.indent)
 
+    # convert a json list to a string with one item per line
+    def list2str(items: list) -> str:
+        if args.format != "json":
+            return json2str(items)
+        if not items:
+            return "[]"
+        pad = " " * args.indent
+        lines = ""
+        for i, item in enumerate(items):
+            lines += pad + json.dumps(item, sort_keys=args.sort)
+            if i + 1 < len(items):
+                paired = isinstance(item, str) and isinstance(items[i + 1], list)
+                lines += ",\n" if paired else ",\n\n"
+        return f"[\n{lines}\n]"
+
     # actual output
     if args.op == "J":  # json dump
         verbose = True if args.verbose is None else args.verbose
@@ -893,6 +1355,18 @@ def jmc_script(xargs: list[str]|None = None) -> int:
     elif args.op == "P":  # preprocessed model
         show = model.toModel(True)
         print(json2str(show), file=output)
+    elif args.op == "A":  # generated test vectors
+        try:
+            tests = vectors(model._init_md, resolver=model._resolver, url=model._url,
+                            extend=args.extend)
+            comment = f"# generated from {args.model}"
+        except UnsupportedValue as e:
+            log.warning(f"{args.model}: {e}")
+            tests, comment = [], f"# generated from {args.model}: {e}"
+        if test_values is not None:
+            tests = _merge_values(tests, args.values_file, test_values, auto_values,
+                                  args.errors_file)
+        print(list2str([comment] + tests), file=output)
     elif args.op == "C":
         assert args.format in LANG, f"valid output language {args.format}"
 
@@ -962,6 +1436,8 @@ def jmc_script(xargs: list[str]|None = None) -> int:
                 max_strcmp_cset=args.max_strcmp_cset,
                 array_unrolling_size=args.array_unrolling_size,
                 mark=args.mark,
+                js_direct=args.js_direct,
+                js_runtime=args.js_runtime,
             )
             source = str(code)
 
@@ -973,8 +1449,11 @@ def jmc_script(xargs: list[str]|None = None) -> int:
         elif args.gen != "none":
             print(source, file=output, end="", flush=True)
             if args.output != "-" and args.gen == "exec":
-                # executable script file: rwxr-xr-w
-                os.chmod(args.output, 0o755)
+                if args.format == "js" and args.js_runtime == "none":
+                    pass
+                else:
+                    # executable script file: rwxr-xr-w
+                    os.chmod(args.output, 0o755)
 
         # import for checks
         if args.format == "py" and args.values:

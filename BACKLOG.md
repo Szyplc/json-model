@@ -2,10 +2,17 @@
 
 ## Current Tasks
 
+- [ ] bench: submit `negatives.jsonl` to jsb for sanity checks
+- [ ] bench: better count should ignore bads
+- [ ] bench: handle case failures for radar (wip, ajv handling)
+- [ ] bench: collect error runs?
+- [ ] bench: add corvus reference?
+- [ ] bench: add stddev performance computation
+- [ ] bench: improve resilience to bad overhead estimation
+- [ ] bench: collect JSON parse times for comparison with validation times
 - [ ] export: generate a [katydid](https://katydid.github.io/) expression, for a compatible subset
 - [ ] pr: add _known limitations_ stuff
 - [ ] front: merge many internal options to trigrams
-- [ ] bench: case failures handling needs some fixing
 - [ ] tests: check more bad urls (eg bad %-escape)
 - [ ] tests: check pydantic generated classes
 - [ ] static: use combined type test and value extraction when available?
@@ -22,11 +29,9 @@
 - [ ] perf: drop and/or merge identical results when comparing
 - [ ] backend: check `mv-34/mu` test case which may require some utf normalization
 - [ ] runtime: count graphemes instead of characters? for Java, see `java.text.BreakIterator`
-- [ ] bench: add stddev performance computation
-- [ ] bench: improve resilience to bad overhead estimation
-- [ ] bench: collect JSON parse times for comparison with validation times
 - [ ] pr: better document optimizations, eg add compiler optimization page
 - [ ] static: improve startswith pattern recognition `/^xyz.*/`
+- [ ] js: implement cset as an or-expression
 - [ ] c-backend: factor out str extraction in or-list in more cases
 - [ ] c-backend: improve unique with hash using int set?
 - [ ] c-backend: improve str hash?
@@ -75,7 +80,6 @@
 - [ ] backend: optimize pattern "{ decl X = ... ; res = f(X (once) ) }"
 - [ ] backend: simplify assignment patterns with ternary operator when available?
 - [ ] backend: consider applying language-specific formatting tools? `clang-format`, `black`…
-- [ ] backend: actually remove ignore code and sequences
 - [ ] c-backend: get pval string into a variable for strcmp unrolling and inlining
 - [ ] c-backend: add number of chunks limit to strcmp optimization
 - [ ] c-backend: strcmp to const inlining and unrolling for all instances
@@ -84,7 +88,6 @@
 - [ ] static: optimize not string cst test?
 - [ ] static: close may/must? merge with open?
 - [ ] static: add a dynamic test for different strategies in object checking
-- [ ] backend: refactor ir optimizations
 - [ ] artifact: make work with dind (docker compose?)
 - [ ] static: recognize already compile objects and reuse function esp under no-reporting?
 - [ ] tests: add non regression tests to docker build
