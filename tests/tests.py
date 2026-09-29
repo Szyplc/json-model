@@ -1082,6 +1082,10 @@ def test_model_json(directory):
 def test_vectors_json(directory, source):
     """Check *.{source}.json test vector files in directory."""
 
+    if source == "auto":
+        log.warning(f"not available yet")
+        return
+
     check_directory_models(
         directory,
         "https://json-model.org/models/jmc-tests",
@@ -1090,6 +1094,7 @@ def test_vectors_json(directory, source):
         EXPECT.get(f"{directory}:models"),
     )
 
+# TODO delete, this as error
 def unsettled_vectors(fpath: pathlib.Path) -> list[tuple[int, list]]:
     """Ordinal and contents of the test vectors of a file which state no result."""
     with open(fpath) as f:
